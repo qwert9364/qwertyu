@@ -1,0 +1,661 @@
+-- ============ 清理旧 GUI（关键修复） ============
+local CG = game:GetService("CoreGui")
+local PG = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
+
+local CLEAN_NAMES = {
+    "CSGOAssistUI","CSGOFOVCircle","CSGOESP","CSGOFloatBtn",
+    "CSGOInfoHUD","CSGONotify","CSGOFlyCtrl","CSGOMarkTP",
+    "WindUI_Example","CSGO_Menu",
+}
+
+-- 1) 按名字清理
+for _, name in ipairs(CLEAN_NAMES) do
+    pcall(function()
+        local old = CG:FindFirstChild(name)
+        if old then old:Destroy() end
+    end)
+    if PG then
+        pcall(function()
+            local old = PG:FindFirstChild(name)
+            if old then old:Destroy() end
+        end)
+    end
+end
+
+-- 2) 清理所有名字含 WindUI 的 ScreenGui
+for _, gui in ipairs(CG:GetChildren()) do
+    pcall(function()
+        if gui:IsA("ScreenGui") and gui.Name:lower():find("windui") then
+            gui:Destroy()
+        end
+    end)
+end
+if PG then
+    for _, gui in ipairs(PG:GetChildren()) do
+        pcall(function()
+            if gui:IsA("ScreenGui") and gui.Name:lower():find("windui") then
+                gui:Destroy()
+            end
+        end)
+    end
+end
+
+-- 3) 清理旧版可能残留的悬浮窗（任何名叫 FloatBtn 的）
+for _, gui in ipairs(CG:GetChildren()) do
+    pcall(function()
+        if gui:IsA("ScreenGui") then
+            for _, child in ipairs(gui:GetChildren()) do
+                if child:IsA("TextButton") and child.Name == "FloatBtn" then
+                    gui:Destroy()
+                    break
+                end
+            end
+        end
+    end)
+end
+
+task.wait(0.15)
+
+-- ============ 加载 WindUI ============
+local WindUI
+local ok, err = pcall(function()
+    WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+end)
+if not ok or not WindUI then
+    warn("[CSGO Assist] WindUI 加载失败: "..tostring(err))
+    return
+end
+
+WindUI.TransparencyValue = 0.2
+WindUI:SetTheme("Dark")
+
+-- ============ 服务 ============
+local Players=game:GetService("Players")
+local RunService=game:GetService("RunService")
+local UIS=game:GetService("UserInputService")
+local WS=game:GetService("Workspace")
+local RS=game:GetService("ReplicatedStorage")
+local LP=Players.LocalPlayer
+
+-- ============ 配置 ============
+local CFG={
+ Aimbot={Enabled=false,Smoothness=5,FOV=150,Range=500,TeamCheck=true,HideTeammate=true,WallCheck=true,NearestPriority=false,ShowTargetDist=true},
+ Movement={Enabled=false,Speed=32,JumpEnabled=false,JumpPower=50,InfiniteJump=false,FlyEnabled=false,FlySpeed=60,FlyNoClip=false},
+ MarkTP={Enabled=false,ShowMarker=true},
+ Teleport={SelectedPlayer=nil,FollowEnabled=false,FollowMode="Head",OffsetY=3},
+ Disguise={TargetPlayer=nil,OriginalDescription=nil,Disguised=false},
+ ESP={Enabled=false,TeamCheck=true,HideTeammate=false,ShowName=true,ShowHealth=true,ShowDistance=false,MaxDistance=800,ShowCount=true,ChamsEnabled=false,ChamsOnlyBlocked=true,ChamsTeamColor=true,ChamsFillR=255,ChamsFillG=70,ChamsFillB=70,ChamsFillTransparency=0.5,ChamsOutlineTransparency=0},
+ Notify={Enabled=true,Duration=2.0,MaxCount=5},
+ FOVCircle={Color=Color3.fromRGB(255,120,180),Thickness=2,Visible=true},
+}
+
+-- ============ 工具 ============
+local function cam() return WS.CurrentCamera end
+
+local function isMate(p)
+ if p==LP then return true end
+ if LP.Team~=nil and p.Team~=nil and LP.Team==p.Team then return true end
+ if LP.TeamColor~=nil and p.TeamColor~=nil and LP.TeamColor==p.TeamColor then return true end
+ for _,a in ipairs({"Team","team","TeamId","teamId","TEAM"})do
+  local x=LP:GetAttribute(a)local y=p:GetAttribute(a)
+  if x~=nil and y~=nil and x==y then return true end
+ end
+ local c1=LP.Character local c2=p.Character
+ if c1 and c2 then
+  for _,a in ipairs({"Team","team","TeamId","teamId"})do
+   local x=c1:GetAttribute(a)local y=c2:GetAttribute(a)
+   if x~=nil and y~=nil and x==y then return true end
+  end
+ end
+ return false
+end
+
+local function los(tp)
+ local c=LP.Character if not c then return false end
+ local r=c:FindFirstChild("HumanoidRootPart")or c:FindFirstChild("Head")or c:FindFirstChildWhichIsA("BasePart")
+ if not r then return false end
+ local tc=tp:FindFirstAncestorOfClass("Model")
+ local o=r.Position local d=tp.Position-o
+ if d.Magnitude<0.1 then return true end
+ local p=RaycastParams.new()p.FilterType=Enum.RaycastFilterType.Exclude
+ local f={c}if tc then table.insert(f,tc)end
+ p.FilterDescendantsInstances=f p.IgnoreWater=true
+ return WS:Raycast(o,d,p)==nil
+end
+
+local function holding()
+ local c=LP.Character if not c then return false end
+ if c:FindFirstChildOfClass("Tool")then return true end
+ local h=c:FindFirstChild("RightHand")or c:FindFirstChild("Right Arm")or c:FindFirstChild("LeftHand")
+ if h then for _,x in ipairs(h:GetChildren())do if x:IsA("BasePart")or x:IsA("MeshPart")or x:IsA("Model")then return true end end end
+ return false
+end
+
+local function notify(title,text,duration)
+ if not CFG.Notify.Enabled then return end
+ WindUI:Notify({Title=tostring(title),Content=tostring(text),Duration=duration or 3})
+end
+local function nTg(name,state)
+ WindUI:Notify({Title=name,Content=state and "已开启" or "已关闭",Icon=state and "check" or "x",Duration=2})
+end
+
+-- ============ 移动逻辑 ============
+task.spawn(function()
+ while task.wait(0.1)do
+  local c=LP.Character
+  if c then
+   local h=c:FindFirstChildOfClass("Humanoid")
+   if h then
+    if CFG.Movement.Enabled then pcall(function()if h.WalkSpeed~=CFG.Movement.Speed then h.WalkSpeed=CFG.Movement.Speed end end)end
+    if CFG.Movement.JumpEnabled then pcall(function()
+     if h.UseJumpPower then if h.JumpPower~=CFG.Movement.JumpPower then h.JumpPower=CFG.Movement.JumpPower end
+     else local t=CFG.Movement.JumpPower/7.5 if math.abs((h.JumpHeight or 0)-t)>0.1 then h.JumpHeight=t end end
+    end)end
+   end
+  end
+ end
+end)
+
+local jumpBtnHeld=false
+local function bindJumpBtn()
+ local pg=LP:FindFirstChildOfClass("PlayerGui") if not pg then return end
+ local tg=pg:FindFirstChild("TouchGui") if not tg then return end
+ local tc=tg:FindFirstChild("TouchControlFrame") if not tc then return end
+ local jb=tc:FindFirstChild("JumpButton") if not jb then return end
+ if jb:GetAttribute("_csgoBind") then return end
+ jb:SetAttribute("_csgoBind",true)
+ jb.InputBegan:Connect(function(i)if i.UserInputType==Enum.UserInputType.Touch then jumpBtnHeld=true end end)
+ jb.InputEnded:Connect(function(i)if i.UserInputType==Enum.UserInputType.Touch then jumpBtnHeld=false end end)
+end
+task.spawn(function() while task.wait(1) do pcall(bindJumpBtn) end end)
+
+task.spawn(function()
+ while true do
+  RunService.Stepped:Wait()
+  if not CFG.Movement.InfiniteJump then continue end
+  if CFG.Movement.FlyEnabled then continue end
+  local c=LP.Character if not c then continue end
+  local hrp=c:FindFirstChild("HumanoidRootPart") if not hrp then continue end
+  local pressed=UIS:IsKeyDown(Enum.KeyCode.Space) or jumpBtnHeld
+  if not pressed then continue end
+  local vel=hrp.AssemblyLinearVelocity
+  hrp.AssemblyLinearVelocity=Vector3.new(vel.X,55,vel.Z)
+ end
+end)
+
+-- ============ 飞行控制 ============
+local FlyGui=Instance.new("ScreenGui")FlyGui.Name="CSGOFlyCtrl"FlyGui.ResetOnSpawn=false FlyGui.DisplayOrder=150 FlyGui.IgnoreGuiInset=true FlyGui.Parent=CG
+local Pad=Instance.new("Frame")Pad.Size=UDim2.new(0,180,0,180)Pad.Position=UDim2.new(1,-200,1,-200)Pad.BackgroundColor3=Color3.fromRGB(30,25,40)Pad.BackgroundTransparency=0.35 Pad.BorderSizePixel=0 Pad.Visible=false Pad.Parent=FlyGui
+Instance.new("UICorner",Pad).CornerRadius=UDim.new(1,0)
+local PadStroke=Instance.new("UIStroke")PadStroke.Color=Color3.fromRGB(255,120,180)PadStroke.Thickness=2 PadStroke.Transparency=0.5 PadStroke.Parent=Pad
+
+local flyDirUp=false local flyDirDown=false local flyDirLeft=false local flyDirRight=false
+local function mkFlyBtn(sym,pos)
+ local b=Instance.new("TextButton")b.Size=UDim2.new(0,52,0,52)b.Position=pos b.AnchorPoint=Vector2.new(0.5,0.5)
+ b.BackgroundColor3=Color3.fromRGB(50,45,65)b.BackgroundTransparency=0.2 b.Text=sym b.TextColor3=Color3.fromRGB(255,255,255)
+ b.Font=Enum.Font.GothamBold b.TextSize=22 b.BorderSizePixel=0 b.AutoButtonColor=false b.Parent=Pad
+ Instance.new("UICorner",b).CornerRadius=UDim.new(1,0) return b
+end
+local bUp=mkFlyBtn("▲",UDim2.new(0.5,0,0,40))
+local bDown=mkFlyBtn("▼",UDim2.new(0.5,0,1,-40))
+local bLeft=mkFlyBtn("◀",UDim2.new(0,40,0.5,0))
+local bRight=mkFlyBtn("▶",UDim2.new(1,-40,0.5,0))
+local function bindFlyBtn(b,setter)
+ b.InputBegan:Connect(function(i)if i.UserInputType==Enum.UserInputType.Touch or i.UserInputType==Enum.UserInputType.MouseButton1 then setter(true) b.BackgroundColor3=Color3.fromRGB(255,120,180) end end)
+ b.InputEnded:Connect(function(i)if i.UserInputType==Enum.UserInputType.Touch or i.UserInputType==Enum.UserInputType.MouseButton1 then setter(false) b.BackgroundColor3=Color3.fromRGB(50,45,65) end end)
+end
+bindFlyBtn(bUp,function(v)flyDirUp=v end)
+bindFlyBtn(bDown,function(v)flyDirDown=v end)
+bindFlyBtn(bLeft,function(v)flyDirLeft=v end)
+bindFlyBtn(bRight,function(v)flyDirRight=v end)
+
+local noclipBackup={} local noclipApplied=false
+local function applyNoClip()
+ local c=LP.Character if not c then return end
+ noclipBackup={}
+ for _,part in ipairs(c:GetDescendants())do
+  if part:IsA("BasePart")then noclipBackup[part]=part.CanCollide pcall(function()part.CanCollide=false end) end
+ end
+ noclipApplied=true
+end
+local function removeNoClip()
+ for part,orig in pairs(noclipBackup)do if part and part.Parent then pcall(function()part.CanCollide=orig end) end end
+ noclipBackup={} noclipApplied=false
+end
+LP.CharacterAdded:Connect(function() noclipBackup={} noclipApplied=false end)
+
+local flyBV=nil local flyBG=nil local flyActive=false
+local function startFly()
+ local c=LP.Character if not c then return end
+ local hrp=c:FindFirstChild("HumanoidRootPart")
+ local hum=c:FindFirstChildOfClass("Humanoid")
+ if not hrp or not hum then return end
+ flyActive=true hum.PlatformStand=true
+ if not flyBV or not flyBV.Parent then
+  flyBV=Instance.new("BodyVelocity")flyBV.MaxForce=Vector3.new(1e5,1e5,1e5)flyBV.Velocity=Vector3.new(0,0,0)flyBV.Parent=hrp
+ end
+ if not flyBG or not flyBG.Parent then
+  flyBG=Instance.new("BodyGyro")flyBG.MaxTorque=Vector3.new(1e5,1e5,1e5)flyBG.P=10000 flyBG.D=500 flyBG.CFrame=hrp.CFrame flyBG.Parent=hrp
+ end
+end
+local function stopFly()
+ flyActive=false flyDirUp=false flyDirDown=false flyDirLeft=false flyDirRight=false
+ local c=LP.Character
+ if c then local hum=c:FindFirstChildOfClass("Humanoid") if hum then hum.PlatformStand=false end end
+ if flyBV then flyBV:Destroy()flyBV=nil end
+ if flyBG then flyBG:Destroy()flyBG=nil end
+ removeNoClip()
+end
+task.spawn(function()
+ while true do
+  RunService.RenderStepped:Wait()
+  if not CFG.Movement.FlyEnabled then
+   if flyActive then stopFly()end
+   if Pad.Visible then Pad.Visible=false end
+   continue
+  end
+  if not Pad.Visible then Pad.Visible=true end
+  local c=LP.Character if not c then if flyActive then stopFly()end continue end
+  local hrp=c:FindFirstChild("HumanoidRootPart")
+  local hum=c:FindFirstChildOfClass("Humanoid")
+  if not hrp or not hum then if flyActive then stopFly()end continue end
+  if not flyActive then startFly()end
+  if not flyBV or not flyBV.Parent then startFly()end
+  if CFG.Movement.FlyNoClip then
+   if not noclipApplied then applyNoClip() else
+    for _,part in ipairs(c:GetDescendants())do if part:IsA("BasePart")and part.CanCollide then pcall(function()part.CanCollide=false end) end end
+   end
+  else
+   if noclipApplied then removeNoClip()end
+  end
+  local cm=cam() if not cm then continue end
+  local camF=cm.CFrame.LookVector
+  local camR=cm.CFrame.RightVector
+  local camRH=Vector3.new(camR.X,0,camR.Z)
+  if camRH.Magnitude>0.001 then camRH=camRH.Unit else camRH=Vector3.new(1,0,0) end
+  local moveDir=hum.MoveDirection
+  local moveVel=Vector3.new(0,0,0)
+  if moveDir.Magnitude>0.01 then moveVel=moveDir*CFG.Movement.Speed end
+  local flyVel=Vector3.new(0,0,0)
+  if flyDirUp then flyVel=flyVel+Vector3.new(0,CFG.Movement.FlySpeed,0) end
+  if flyDirDown then flyVel=flyVel-Vector3.new(0,CFG.Movement.FlySpeed,0) end
+  if flyDirLeft then flyVel=flyVel-camRH*CFG.Movement.FlySpeed end
+  if flyDirRight then flyVel=flyVel+camRH*CFG.Movement.FlySpeed end
+  if UIS:IsKeyDown(Enum.KeyCode.Space) then flyVel=flyVel+Vector3.new(0,CFG.Movement.FlySpeed,0) end
+  if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then flyVel=flyVel-Vector3.new(0,CFG.Movement.FlySpeed,0) end
+  local finalVel=moveVel+flyVel
+  if finalVel.Magnitude<0.01 then finalVel=Vector3.new(0,0,0) end
+  if flyBV and flyBV.Parent then flyBV.Velocity=finalVel end
+  if flyBG and flyBG.Parent then flyBG.CFrame=CFrame.new(hrp.Position,hrp.Position+camF) end
+ end
+end)
+
+-- ============ 标点传送 ============
+local MarkGui=Instance.new("ScreenGui")MarkGui.Name="CSGOMarkTP"MarkGui.ResetOnSpawn=false MarkGui.DisplayOrder=160 MarkGui.IgnoreGuiInset=true MarkGui.Parent=CG
+local Marker=Instance.new("Frame")Marker.Size=UDim2.new(0,40,0,40)Marker.AnchorPoint=Vector2.new(0.5,0.5)Marker.BackgroundTransparency=1 Marker.Visible=false Marker.Parent=MarkGui
+local MCircle=Instance.new("Frame")MCircle.Size=UDim2.new(1,0,1,0)MCircle.AnchorPoint=Vector2.new(0.5,0.5)MCircle.Position=UDim2.new(0.5,0,0.5,0)
+MCircle.BackgroundTransparency=0.5 MCircle.BackgroundColor3=Color3.fromRGB(255,120,180)MCircle.BorderSizePixel=0 MCircle.Parent=Marker
+Instance.new("UICorner",MCircle).CornerRadius=UDim.new(1,0)
+local MDot=Instance.new("Frame")MDot.Size=UDim2.new(0,8,0,8)MDot.AnchorPoint=Vector2.new(0.5,0.5)MDot.Position=UDim2.new(0.5,0,0.5,0)
+MDot.BackgroundColor3=Color3.fromRGB(255,255,255)MDot.BorderSizePixel=0 MDot.Parent=Marker
+Instance.new("UICorner",MDot).CornerRadius=UDim.new(1,0)
+
+local function doMarkTeleport(sx,sy)
+ local cm=cam() if not cm then return end
+ local myChar=LP.Character if not myChar then return end
+ local myRoot=myChar:FindFirstChild("HumanoidRootPart") if not myRoot then return end
+ local ray=cm:ViewportPointToRay(sx,sy)
+ local params=RaycastParams.new()
+ params.FilterType=Enum.RaycastFilterType.Exclude
+ params.FilterDescendantsInstances={myChar}
+ params.IgnoreWater=true
+ local result=WS:Raycast(ray.Origin,ray.Direction*5000,params)
+ local pos = result and result.Position or (ray.Origin+ray.Direction*500)
+ myRoot.CFrame=CFrame.new(pos+Vector3.new(0,3,0))
+ if CFG.MarkTP.ShowMarker then
+  local sp,onScreen=cm:WorldToViewportPoint(pos)
+  if onScreen then
+   Marker.Position=UDim2.new(0,sp.X,0,sp.Y)Marker.Visible=true
+   task.delay(1.2,function()if Marker then Marker.Visible=false end end)
+  end
+ end
+ notify("标点传送","已传送到点击位置")
+end
+
+UIS.InputBegan:Connect(function(i,gp)
+ if gp then return end
+ if not CFG.MarkTP.Enabled then return end
+ if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+  doMarkTeleport(i.Position.X,i.Position.Y)
+ end
+end)
+
+-- ============ 伪装 ============
+local disguiseState={ClientMode=false,FakeBody=nil,NameGui=nil,SyncThread=nil,BackupParts=nil}
+local function cleanupClientDisguise()
+ if disguiseState.FakeBody then pcall(function()disguiseState.FakeBody:Destroy()end) disguiseState.FakeBody=nil end
+ if disguiseState.NameGui then pcall(function()disguiseState.NameGui:Destroy()end) disguiseState.NameGui=nil end
+ if disguiseState.BackupParts then
+  for part,data in pairs(disguiseState.BackupParts)do
+   if part and part.Parent then
+    pcall(function()
+     if data.MeshId and part:IsA("MeshPart")then part.MeshId=data.MeshId end
+     if data.TextureID and part:IsA("MeshPart")then part.TextureID=data.TextureID end
+     if data.Color then part.Color=data.Color end
+     if data.Material then part.Material=data.Material end
+    end)
+   end
+  end
+  disguiseState.BackupParts=nil
+ end
+ local myChar=LP.Character
+ if myChar then for _,part in ipairs(myChar:GetDescendants())do if part:IsA("BasePart")then pcall(function()part.LocalTransparencyModifier=0 end) end end end
+ disguiseState.ClientMode=false
+end
+
+local function tryCloneDisguise(target)
+ local myChar=LP.Character local tgtChar=target.Character
+ if not myChar or not tgtChar then return false,"角色未加载" end
+ for _,part in ipairs(myChar:GetDescendants())do if part:IsA("BasePart")then pcall(function()part.LocalTransparencyModifier=1 end) end end
+ local ok,result=pcall(function()
+  local fake=tgtChar:Clone()
+  if not fake then error("Clone 返回空")end
+  fake.Name="_Fk"..math.random(100000,999999)
+  local toRemove={}
+  for _,obj in ipairs(fake:GetDescendants())do
+   if obj:IsA("Script")or obj:IsA("LocalScript")or obj:IsA("ModuleScript")or obj:IsA("Humanoid")then table.insert(toRemove,obj)
+   elseif obj:IsA("BasePart")then pcall(function()obj.CanCollide=false obj.CanQuery=false obj.CanTouch=false obj.Massless=true obj.Anchored=false obj.Locked=true end) end
+  end
+  for _,obj in ipairs(toRemove)do pcall(function()obj:Destroy()end) end
+  fake.Parent=WS disguiseState.FakeBody=fake disguiseState.ClientMode=true
+  disguiseState.SyncThread=task.spawn(function()
+   while disguiseState.FakeBody and disguiseState.FakeBody.Parent do
+    RunService.RenderStepped:Wait()
+    local c=LP.Character
+    if c and disguiseState.FakeBody then pcall(function()disguiseState.FakeBody:PivotTo(c:GetPivot())end) end
+   end
+  end)
+ end)
+ if not ok then
+  for _,part in ipairs(myChar:GetDescendants())do if part:IsA("BasePart")then pcall(function()part.LocalTransparencyModifier=0 end) end end
+  return false,tostring(result)
+ end
+ return true
+end
+
+local function doDisguise(target)
+ if not target then notify("伪装失败","未选择玩家") return false end
+ local myChar=LP.Character local tgtChar=target.Character
+ if not myChar then notify("伪装失败","你的角色未加载") return false end
+ if not tgtChar then notify("伪装失败","目标角色未加载") return false end
+ local myHum=myChar:FindFirstChildOfClass("Humanoid") local tgtHum=tgtChar:FindFirstChildOfClass("Humanoid")
+ if not myHum or not tgtHum then notify("伪装失败","找不到 Humanoid") return false end
+ if not CFG.Disguise.OriginalDescription then
+  local ok,desc=pcall(function()return myHum:GetAppliedDescription()end)
+  if ok and desc then CFG.Disguise.OriginalDescription=desc end
+ end
+ local applied=false
+ local ok,desc2=pcall(function()return tgtHum:GetAppliedDescription()end)
+ if ok and desc2 then applied=pcall(function()myHum:ApplyDescription(desc2)end) end
+ local fakeName=target.DisplayName if not fakeName or fakeName=="" then fakeName=target.Name end
+ pcall(function()myHum.DisplayName=fakeName end)
+ if applied then
+  notify("伪装成功","已伪装成 "..target.Name.."（服务器）")
+  CFG.Disguise.Disguised=true CFG.Disguise.TargetPlayer=target return true
+ end
+ local okB,errB=tryCloneDisguise(target)
+ if okB then
+  notify("伪装成功","已伪装成 "..target.Name.."（克隆）")
+  CFG.Disguise.Disguised=true CFG.Disguise.TargetPlayer=target return true
+ end
+ notify("伪装失败",tostring(errB)) return false
+end
+
+local function doUndisguise()
+ cleanupClientDisguise()
+ local myChar=LP.Character
+ if myChar then
+  local myHum=myChar:FindFirstChildOfClass("Humanoid")
+  if myHum then
+   if CFG.Disguise.OriginalDescription then pcall(function()myHum:ApplyDescription(CFG.Disguise.OriginalDescription)end) end
+   pcall(function()myHum.DisplayName=LP.DisplayName end)
+  end
+ end
+ CFG.Disguise.Disguised=false CFG.Disguise.TargetPlayer=nil CFG.Disguise.OriginalDescription=nil
+ notify("已取消伪装","恢复原始外观")
+end
+LP.CharacterAdded:Connect(function()
+ cleanupClientDisguise()
+ CFG.Disguise.Disguised=false CFG.Disguise.TargetPlayer=nil CFG.Disguise.OriginalDescription=nil
+end)
+
+-- ============ 传送 ============
+local function getTgt()
+ local p=CFG.Teleport.SelectedPlayer
+ if not p or not p.Parent then return nil end
+ local c=p.Character if not c then return nil end
+ local hd=c:FindFirstChild("Head")or c:FindFirstChild("HumanoidRootPart")
+ if not hd then return nil end
+ return hd,c
+end
+local function tpSelHead()
+ local hd=getTgt() if not hd then notify("传送失败","未选择玩家") return end
+ local mc=LP.Character local mr=mc and mc:FindFirstChild("HumanoidRootPart") if not mr then return end
+ mr.CFrame=CFrame.new(hd.Position+Vector3.new(0,CFG.Teleport.OffsetY,0))
+end
+local function tpSelBack()
+ local hd,c=getTgt() if not hd or not c then notify("传送失败","未选择玩家") return end
+ local mc=LP.Character local mr=mc and mc:FindFirstChild("HumanoidRootPart") if not mr then return end
+ local lk=c:GetPivot().LookVector
+ mr.CFrame=CFrame.new(hd.Position-lk*3+Vector3.new(0,1,0))
+end
+local function tpSelFeet()
+ local hd=getTgt() if not hd then notify("传送失败","未选择玩家") return end
+ local mc=LP.Character local mr=mc and mc:FindFirstChild("HumanoidRootPart") if not mr then return end
+ mr.CFrame=CFrame.new(hd.Position-Vector3.new(0,2.5,0))
+end
+task.spawn(function()
+ while true do
+  RunService.Heartbeat:Wait()
+  if not CFG.Teleport.FollowEnabled then continue end
+  local hd,c=getTgt() if not hd or not c then continue end
+  local mc=LP.Character local mr=mc and mc:FindFirstChild("HumanoidRootPart") if not mr then continue end
+  if CFG.Teleport.FollowMode=="Head"then mr.CFrame=CFrame.new(hd.Position+Vector3.new(0,CFG.Teleport.OffsetY,0))
+  elseif CFG.Teleport.FollowMode=="Back"then local lk=c:GetPivot().LookVector mr.CFrame=CFrame.new(hd.Position-lk*3+Vector3.new(0,1,0)) end
+ end
+end)
+
+-- ============ HUD ============
+local IG=Instance.new("ScreenGui")IG.Name="CSGOInfoHUD"IG.ResetOnSpawn=false IG.DisplayOrder=50 IG.IgnoreGuiInset=false IG.Parent=CG
+local ECL=Instance.new("TextLabel")ECL.Size=UDim2.new(0,180,0,26)ECL.Position=UDim2.new(0.5,-90,0,8)ECL.BackgroundColor3=Color3.fromRGB(20,20,20)ECL.BackgroundTransparency=0.35
+ECL.TextColor3=Color3.fromRGB(255,255,255)ECL.Font=Enum.Font.GothamBold ECL.TextSize=14 ECL.Text="ESP: 0"ECL.Visible=CFG.ESP.ShowCount ECL.Parent=IG
+Instance.new("UICorner",ECL).CornerRadius=UDim.new(0,4)
+local ADL=Instance.new("TextLabel")ADL.Size=UDim2.new(0,220,0,20)ADL.Position=UDim2.new(0.5,-110,0.5,55)ADL.BackgroundTransparency=1
+ADL.TextColor3=Color3.fromRGB(255,120,120)ADL.TextStrokeTransparency=0 ADL.TextStrokeColor3=Color3.fromRGB(0,0,0)
+ADL.Font=Enum.Font.GothamBold ADL.TextSize=14 ADL.Text=""ADL.Visible=CFG.Aimbot.ShowTargetDist ADL.Parent=IG
+
+-- ============ FOV 圆圈 ============
+local FOVG=Instance.new("ScreenGui")FOVG.Name="CSGOFOVCircle"FOVG.ResetOnSpawn=false FOVG.IgnoreGuiInset=false FOVG.DisplayOrder=5 FOVG.Parent=CG
+local FOVC=Instance.new("Frame")FOVC.AnchorPoint=Vector2.new(0.5,0.5)FOVC.Position=UDim2.new(0.5,0,0.5,0)FOVC.Size=UDim2.new(0,CFG.Aimbot.FOV*2,0,CFG.Aimbot.FOV*2)
+FOVC.BackgroundTransparency=1 FOVC.Visible=CFG.FOVCircle.Visible FOVC.Parent=FOVG
+Instance.new("UICorner",FOVC).CornerRadius=UDim.new(1,0)
+local FOVS=Instance.new("UIStroke")FOVS.Thickness=CFG.FOVCircle.Thickness FOVS.Color=CFG.FOVCircle.Color FOVS.Transparency=0 FOVS.Parent=FOVC
+
+-- ============ 自瞄 ============
+local lTD=0
+local function getT()
+ local cm=cam() if not cm then return nil end
+ local ct=Vector2.new(cm.ViewportSize.X/2,cm.ViewportSize.Y/2)
+ local b,bs=nil,math.huge
+ for _,p in ipairs(Players:GetPlayers())do
+  if p==LP then continue end
+  local c=p.Character if not c then continue end
+  local h=c:FindFirstChildOfClass("Humanoid") if not h or h.Health<=0 then continue end
+  if CFG.Aimbot.HideTeammate and isMate(p)then continue end
+  if CFG.Aimbot.TeamCheck and isMate(p)then continue end
+  local pr=c:FindFirstChild("Head")or c:FindFirstChild("HumanoidRootPart") if not pr then continue end
+  local ds=(pr.Position-cm.CFrame.Position).Magnitude
+  if ds>CFG.Aimbot.Range then continue end
+  local sp,os=cm:WorldToViewportPoint(pr.Position) if not os then continue end
+  local sd=(Vector2.new(sp.X,sp.Y)-ct).Magnitude
+  if sd>CFG.Aimbot.FOV then continue end
+  if CFG.Aimbot.WallCheck and not los(pr)then continue end
+  local sc=CFG.Aimbot.NearestPriority and ds or sd
+  if sc<bs then bs=sc b=pr lTD=ds end
+ end
+ return b
+end
+local function updAim()
+ if not CFG.Aimbot.Enabled or not holding()then ADL.Text="" return end
+ local t=getT() if not t then ADL.Text="" return end
+ local cm=cam() if not cm then return end
+ local cur=cm.CFrame
+ local dl=t.Position-cur.Position
+ if dl.Magnitude<0.1 then return end
+ local gl=CFrame.lookAt(cur.Position,t.Position,Vector3.new(0,1,0))
+ local al=math.clamp(CFG.Aimbot.Smoothness/10,0.08,1)
+ cm.CFrame=cur:Lerp(gl,al)
+ if CFG.Aimbot.ShowTargetDist then ADL.Text=string.format("目标: %d studs",math.floor(lTD)) end
+end
+pcall(function()RunService:UnbindFromRenderStep("CSGO_Aim_v71")end)
+RunService:BindToRenderStep("CSGO_Aim_v71",Enum.RenderPriority.Camera.Value+1,updAim)
+
+-- ============ 透视 ============
+local EG=Instance.new("ScreenGui")EG.Name="CSGOESP"EG.ResetOnSpawn=false EG.IgnoreGuiInset=true EG.Parent=CG
+local espCache={}
+local function mkESP(p)
+ if espCache[p]then
+  if espCache[p].billboard then espCache[p].billboard:Destroy()end
+  if espCache[p].highlight then espCache[p].highlight:Destroy()end
+  espCache[p]=nil
+ end
+ local bb=Instance.new("BillboardGui")bb.Name="ESP_"..p.Name bb.Size=UDim2.new(0,130,0,56)bb.StudsOffset=Vector3.new(0,3.2,0)bb.AlwaysOnTop=true bb.MaxDistance=CFG.ESP.MaxDistance bb.Parent=EG
+ local rt=Instance.new("Frame")rt.Size=UDim2.new(1,0,1,0)rt.BackgroundTransparency=1 rt.Parent=bb
+ local nm=Instance.new("TextLabel")nm.Size=UDim2.new(1,0,0,16)nm.BackgroundTransparency=1 nm.Text=p.Name nm.TextColor3=Color3.fromRGB(255,255,255)
+ nm.TextStrokeTransparency=0 nm.TextStrokeColor3=Color3.fromRGB(0,0,0)nm.Font=Enum.Font.GothamBold nm.TextSize=13 nm.Parent=rt
+ local hb=Instance.new("Frame")hb.Size=UDim2.new(1,-20,0,6)hb.Position=UDim2.new(0.5,0,0,18)hb.AnchorPoint=Vector2.new(0.5,0)
+ hb.BackgroundColor3=Color3.fromRGB(20,20,20)hb.BorderSizePixel=0 hb.Parent=rt
+ Instance.new("UICorner",hb).CornerRadius=UDim.new(1,0)
+ local hf=Instance.new("Frame")hf.Size=UDim2.new(1,0,1,0)hf.BackgroundColor3=Color3.fromRGB(255,120,180)hf.BorderSizePixel=0 hf.Parent=hb
+ Instance.new("UICorner",hf).CornerRadius=UDim.new(1,0)
+ local dl=Instance.new("TextLabel")dl.Size=UDim2.new(1,0,0,14)dl.Position=UDim2.new(0,0,0,26)dl.BackgroundTransparency=1 dl.Text="0m"
+ dl.TextColor3=Color3.fromRGB(200,200,200)dl.TextStrokeTransparency=0 dl.TextStrokeColor3=Color3.fromRGB(0,0,0)
+ dl.Font=Enum.Font.Gotham dl.TextSize=11 dl.Parent=rt
+ local hl=Instance.new("Highlight")hl.Name="ESP_Chams_"..p.Name hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+ hl.OutlineColor=Color3.fromRGB(255,120,180)hl.OutlineTransparency=0 hl.FillColor=Color3.fromRGB(255,120,180)
+ hl.FillTransparency=0.5 hl.Enabled=false hl.Adornee=nil hl.Parent=EG
+ espCache[p]={billboard=bb,root=rt,nameLbl=nm,hpFill=hf,distLbl=dl,highlight=hl}
+end
+local function rmESP(p)
+ if espCache[p]then
+  if espCache[p].billboard then espCache[p].billboard:Destroy()end
+  if espCache[p].highlight then espCache[p].highlight:Destroy()end
+  espCache[p]=nil
+ end
+end
+RunService.RenderStepped:Connect(function()
+ local cm=cam() if not cm then return end
+ local cnt=0
+ for p,d in pairs(espCache)do
+  if not p.Parent then rmESP(p) continue end
+  local c=p.Character
+  local hd=c and c:FindFirstChild("Head")
+  local hm=c and c:FindFirstChildOfClass("Humanoid")
+  if not hd or not hm or hm.Health<=0 then d.root.Visible=false if d.highlight then d.highlight.Enabled=false end continue end
+  local ds=(cm.CFrame.Position-hd.Position).Magnitude
+  if ds>CFG.ESP.MaxDistance then d.root.Visible=false if d.highlight then d.highlight.Enabled=false end continue end
+  local mt=CFG.ESP.TeamCheck and isMate(p)
+  local hide=CFG.ESP.HideTeammate and mt
+  if not CFG.ESP.Enabled or hide then d.root.Visible=false
+  else
+   local en=not mt
+   local col=en and Color3.fromRGB(255,120,180)or Color3.fromRGB(120,220,130)
+   d.billboard.Adornee=hd d.billboard.MaxDistance=CFG.ESP.MaxDistance d.root.Visible=true cnt=cnt+1
+   d.nameLbl.Visible=CFG.ESP.ShowName d.nameLbl.TextColor3=col
+   d.hpFill.Visible=CFG.ESP.ShowHealth
+   local hp=math.clamp(hm.Health/hm.MaxHealth,0,1)
+   d.hpFill.Size=UDim2.new(hp,0,1,0)
+   d.hpFill.BackgroundColor3=hp>0.6 and Color3.fromRGB(120,220,130)or hp>0.3 and Color3.fromRGB(255,200,0)or Color3.fromRGB(220,40,40)
+   d.distLbl.Visible=CFG.ESP.ShowDistance
+   if CFG.ESP.ShowDistance then d.distLbl.Text=string.format("%dm",math.floor(ds)) end
+  end
+  if d.highlight then
+   if CFG.ESP.ChamsEnabled and not hide then
+    local bk
+    if CFG.ESP.ChamsOnlyBlocked then bk=not los(hd) else bk=true end
+    if bk then
+     d.highlight.Adornee=c d.highlight.Enabled=true
+     d.highlight.FillTransparency=CFG.ESP.ChamsFillTransparency
+     d.highlight.OutlineTransparency=CFG.ESP.ChamsOutlineTransparency
+     if CFG.ESP.ChamsTeamColor then
+      if mt then d.highlight.FillColor=Color3.fromRGB(120,220,130) d.highlight.OutlineColor=Color3.fromRGB(120,220,130)
+      else d.highlight.FillColor=Color3.fromRGB(255,120,180) d.highlight.OutlineColor=Color3.fromRGB(255,120,180) end
+     else
+      local c2=Color3.fromRGB(CFG.ESP.ChamsFillR,CFG.ESP.ChamsFillG,CFG.ESP.ChamsFillB)
+      d.highlight.FillColor=c2 d.highlight.OutlineColor=c2
+     end
+    else d.highlight.Enabled=false d.highlight.Adornee=nil end
+   else d.highlight.Enabled=false d.highlight.Adornee=nil end
+  end
+ end
+ if CFG.ESP.ShowCount then ECL.Text="ESP: "..cnt end
+end)
+Players.PlayerAdded:Connect(function(p)if p~=LP then mkESP(p)end end)
+Players.PlayerRemoving:Connect(rmESP)
+for _,p in ipairs(Players:GetPlayers())do if p~=LP then mkESP(p)end end
+LP.CharacterAdded:Connect(function()
+ task.wait(0.6)
+ for _,p in ipairs(Players:GetPlayers())do if p~=LP and not espCache[p]then mkESP(p)end end
+end)
+
+-- ============ WindUI 界面 ============
+local function getPlayerNames()
+ local list={}
+ for _,p in ipairs(Players:GetPlayers())do if p~=LP then table.insert(list,p.Name) end end
+ return list
+end
+
+local Window = WindUI:CreateWindow({
+ Title="CS:GO Assist v7.1", Icon="crosshair", Author="WindUI Edition",
+ Folder="CSGOAssist_WindUI", Size=UDim2.fromOffset(720,520), Theme="Dark",
+ User={Enabled=true,Anonymous=true,Callback=function() WindUI:Notify({Title="关于",Content="CS:GO Assist v7.1",Duration=3}) end},
+ SideBarWidth=200, ScrollBarEnabled=true,
+})
+Window:Tag({Title="v7.1",Color=Color3.fromHex("#ff78b4")})
+Window:Tag({Title="WindUI"})
+
+local MainSection = Window:Section({Title="主要功能",Opened=true})
+local SettingSection = Window:Section({Title="设置",Opened=true})
+
+local AimbotTab = MainSection:Tab({Title="自瞄",Icon="crosshair"})
+local MoveTab = MainSection:Tab({Title="移动",Icon="zap"})
+local TeleportTab = MainSection:Tab({Title="传送",Icon="navigation"})
+local DisguiseTab = MainSection:Tab({Title="伪装",Icon="user"})
+local ESPTab = MainSection:Tab({Title="透视",Icon="eye"})
+local FOVTab = SettingSection:Tab({Title="FOV",Icon="circle"})
+local NotifyTab = SettingSection:Tab({Title="提示",Icon="bell"})
+
+-- 自瞄
+AimbotTab:Toggle({Title="自瞄开关",Value=CFG.Aimbot.Enabled,Callback=function(v)CFG.Aimbot.Enabled=v nTg("自动瞄准",v) end})
+AimbotTab:Toggle({Title="队伍识别",Value=CFG.Aimbot.TeamCheck,Callback=function(v)CFG.Aimbot.TeamCheck=v end})
+AimbotTab:Toggle({Title="屏蔽队友",Value=CFG.Aimbot.HideTeammate,Callback=function(v)CFG.Aimbot.HideTeammate=v end})
+AimbotTab:Toggle({Title="掩体识别",Value=CFG.Aimbot.WallCheck,Callback=function(v)CFG.Aimbot.WallCheck=v end})
+AimbotTab:Toggle({Title="优先最近",Value=CFG.Aimbot.NearestPriority,Callback=function(v)CFG.Aimbot.NearestPriority=v end})
+AimbotTab:Toggle({Title="显示目标距离",Value=CFG.Aimbot.ShowTargetDist,Callback=function(v)CFG.Aimbot.ShowTargetDist=v ADL.Visible=v end})
+AimbotTab:Divider()
+AimbotTab:Slider({Title="平滑度",Value={Min=1,Max=20,Default=CFG.Aimbot.Smoothness},Callback=function(v)CFG.Aimbot.Smoothness=v end})
+AimbotTab:Slider({Title="自瞄范围",Value={Min=20,Max=2000,Default=CFG.Aimbot.Range},Callback=function(v)CFG.Aimbot.Range=v end})
+AimbotTab:Slider({Title="FOV 半径",Value={Min=20,Max=600,Default=CFG.Aimbot.FOV},Callback=function(v)CFG.Aimbot.FOV=v if FOVC then FOVC.Size=UDim2.new(0,v*2,0,v*2) end end})
+
+-- 移动
+MoveTab:Toggle({Title="移速修改",Value=CFG.Movement.Enabled,Callback=function(v)CFG.Movement.Enabled=v nTg("移速修改",v) end})
+MoveTab:Toggle({Title="跳跃力修改",Value=CFG.Movement.JumpEnabled,Callback=function(v)CFG.Movement.JumpEnabled=v end})
+MoveTab:Toggle({Title="无限连跳",Value=CFG.Movement.InfiniteJump,Callback=function(v)CFG.Movement.InfiniteJump=v nTg("无限连跳",v) end})
+MoveTab:Toggle({Title="飞行模式",Value=CFG.Movement.FlyEnabled,Callback=function(v)CFG.Movement.FlyEnabled=v if not v then stopFly() end nTg("飞行模式",v) end})
+MoveTab:Toggle({Title="飞行穿墙",Value=CFG.Movement.FlyNoClip,Callback=function(v)CFG.Movement.FlyNoClip=v if not v then removeNoClip() end end})
+MoveTab:Toggle({Title="标点传送",Value=CFG.MarkTP.Enabled,Callback=function(v)CFG.MarkTP.Enabled=v nTg("标点传送",v) end})
+MoveTab:Toggle({Title="显示落点标记",Value=CFG.MarkTP.ShowMarker,Callback=function(v)CFG.MarkTP.ShowMarker=v end})
+MoveTab:Divider()
+MoveTab:Slider({Title="移动速度",Value={Min=16,Max=500,Default=CFG.Movement.Speed},Callback=function(v)CFG.Movement.Speed=v end})
+MoveTab:Slider({Title="跳跃力",Value={Min=50,Max=500,Default=CFG.Movement.JumpPower},Callback=function(v)CFG.Movement.JumpPower=v end})
+MoveTa
