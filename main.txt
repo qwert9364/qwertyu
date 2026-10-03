@@ -1,0 +1,528 @@
+local CG=game:GetService("CoreGui")
+local PG=game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
+local KILL_EXACT={"CSGOAssistUI","CSGOFOVCircle","CSGOESP","CSGOFloatBtn","CSGOInfoHUD","CSGONotify","CSGOFlyCtrl","CSGOMarkTP","WindUI_Example","CSGO_Menu"}
+local KILL_KEYWORDS={"csgoassist","csgoesp","csgofloat","csgofovcircle","csgoflyctrl","csgomarktp","csgonotify","csgoinfo","csgo_menu"}
+local function isMyGui(g)local n=g.Name:lower()for _,kw in ipairs(KILL_KEYWORDS)do if n:find(kw,1,true)then return true end end return false end
+local _killed=0
+local function safeClean(container)if not container then return end for _,g in ipairs(container:GetChildren())do pcall(function()if g:IsA("ScreenGui")then local exact=false for _,name in ipairs(KILL_EXACT)do if g.Name==name then exact=true break end end if exact or isMyGui(g)then g:Destroy()_killed=_killed+1 end end end)end end
+safeClean(CG)safeClean(PG)
+task.wait(0.15)
+local SG=PG or CG
+local WindUI
+local ok,err=pcall(function()WindUI=loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()end)
+if not ok or not WindUI then return end
+WindUI.TransparencyValue=0.2
+WindUI:SetTheme("Dark")
+local Players=game:GetService("Players")
+local RunService=game:GetService("RunService")
+local UIS=game:GetService("UserInputService")
+local WS=game:GetService("Workspace")
+local RS=game:GetService("ReplicatedStorage")
+local LP=Players.LocalPlayer
+local HttpService=game:GetService("HttpService")
+local PROXY_CONFIG={ROOT="",ACCESS_KEY=""}
+local USE_PROXY=(PROXY_CONFIG.ROOT~="" and PROXY_CONFIG.ACCESS_KEY~="")
+local CFG={
+ Aimbot={Enabled=false,Smoothness=5,FOV=150,Range=500,TeamCheck=true,HideTeammate=true,WallCheck=true,NearestPriority=false,ShowTargetDist=true},
+ Movement={Enabled=false,Speed=32,JumpEnabled=false,JumpPower=50,InfiniteJump=false,FlyEnabled=false,FlySpeed=60,FlyNoClip=false},
+ FallImmunity={Enabled=false},
+ MarkTP={Enabled=false,ShowMarker=true},
+ SpinFlail={Target=nil,Strength=5,Duration=3.0,SpinSpeed=80,GodMode=true},
+ Observer={Target=nil,Mode="Third",Offset=6,Smooth=true,Active=false},
+ Music={Enabled=false,Volume=0.5,CurrentSong=nil,SearchResults={},LastUrl=nil,SoundInstance=nil},
+ Teleport={SelectedPlayer=nil,FollowEnabled=false,FollowMode="Head",OffsetY=3},
+ Disguise={TargetPlayer=nil,OriginalDescription=nil,Disguised=false},
+ ESP={Enabled=false,TeamCheck=true,HideTeammate=false,ShowName=true,ShowHealth=true,ShowDistance=false,MaxDistance=800,ShowCount=true,ChamsEnabled=false,ChamsOnlyBlocked=true,ChamsTeamColor=true,ChamsFillR=255,ChamsFillG=70,ChamsFillB=70,ChamsFillTransparency=0.5,ChamsOutlineTransparency=0},
+ Notify={Enabled=true,Duration=2.0,MaxCount=5},
+ FOVCircle={Color=Color3.fromRGB(255,120,180),Thickness=2,Visible=true},
+}
+local function cam()return WS.CurrentCamera end
+local function isMate(p)
+ if p==LP then return true end
+ if LP.Team~=nil and p.Team~=nil and LP.Team==p.Team then return true end
+ if LP.TeamColor~=nil and p.TeamColor~=nil and LP.TeamColor==p.TeamColor then return true end
+ for _,a in ipairs({"Team","team","TeamId","teamId","TEAM"})do local x=LP:GetAttribute(a)local y=p:GetAttribute(a)if x~=nil and y~=nil and x==y then return true end end
+ local c1=LP.Character local c2=p.Character
+ if c1 and c2 then for _,a in ipairs({"Team","team","TeamId","teamId"})do local x=c1:GetAttribute(a)local y=c2:GetAttribute(a)if x~=nil and y~=nil and x==y then return true end end end
+ return false
+end
+local function los(tp)
+ local c=LP.Character if not c then return false end
+ local r=c:FindFirstChild("HumanoidRootPart")or c:FindFirstChild("Head")or c:FindFirstChildWhichIsA("BasePart")
+ if not r then return false end
+ local tc=tp:FindFirstAncestorOfClass("Model")
+ local o=r.Position local d=tp.Position-o
+ if d.Magnitude<0.1 then return true end
+ local p=RaycastParams.new()p.FilterType=Enum.RaycastFilterType.Exclude
+ local f={c}if tc then table.insert(f,tc)end
+ p.FilterDescendantsInstances=f p.IgnoreWater=true
+ return WS:Raycast(o,d,p)==nil
+end
+local function holding()
+ local c=LP.Character if not c then return false end
+ if c:FindFirstChildOfClass("Tool")then return true end
+ local h=c:FindFirstChild("RightHand")or c:FindFirstChild("Right Arm")or c:FindFirstChild("LeftHand")
+ if h then for _,x in ipairs(h:GetChildren())do if x:IsA("BasePart")or x:IsA("MeshPart")or x:IsA("Model")then return true end end end
+ return false
+end
+local function notify(title,text,duration)
+ if not CFG.Notify.Enabled then return end
+ WindUI:Notify({Title=tostring(title),Content=tostring(text),Duration=duration or 3})
+end
+local function nTg(name,state)WindUI:Notify({Title=name,Content=state and "已开启" or "已关闭",Icon=state and "check" or "x",Duration=2})end
+local function refreshDropdown(dd,values)
+ if not dd then return false end
+ if type(dd.Refresh)=="function"then pcall(function()dd:Refresh(values)end)return true
+ elseif type(dd.SetValues)=="function"then pcall(function()dd:SetValues(values)end)return true
+ elseif type(dd.UpdateValues)=="function"then pcall(function()dd:UpdateValues(values)end)return true end
+ return false
+end
+local function httpGet(url,headers)
+ if USE_PROXY then
+  local proxyUrl=PROXY_CONFIG.ROOT.."/"..PROXY_CONFIG.ACCESS_KEY.."/"..HttpService:UrlEncode(url)
+  local resp=HttpService:GetAsync(proxyUrl)
+  local ok,data=pcall(HttpService.JSONDecode,HttpService,resp)
+  if ok and data and data.body then return data.body end
+  return resp
+ else
+  return HttpService:GetAsync(url)
+ end
+end
+local function httpPost(url,body,headers)
+ if USE_PROXY then
+  local proxyUrl=PROXY_CONFIG.ROOT.."/"..PROXY_CONFIG.ACCESS_KEY.."/"
+  local resp=HttpService:PostAsync(proxyUrl,HttpService:JSONEncode({url=url,body=body,headers=headers or {}}),Enum.HttpContentType.ApplicationJson)
+  local ok,data=pcall(HttpService.JSONDecode,HttpService,resp)
+  if ok and data and data.body then return data.body end
+  return resp
+ else
+  return HttpService:PostAsync(url,body,Enum.HttpContentType.ApplicationJson)
+ end
+end
+local MusicAPI={SearchUrl="https://u.y.qq.com/cgi-bin/musicu.fcg",VkeyUrl="https://u.y.qq.com/cgi-bin/musicu.fcg"}
+local function genSearchId()local s=""for _=1,10 do s=s..tostring(math.random(0,9))end return s end
+local function musicSearch(keyword)
+ if not keyword or keyword=="" then return {} end
+ local results={}
+ local ok,err=pcall(function()
+  local payload={comm={g_tk=5381,format="json",inCharset="utf-8",outCharset="utf-8",notice=0,platform="h5",needNewCode=1,ct=23,cv=0},req_0={module="music.search.SearchCgiService",method="DoSearchForQQMusicDesktop",param={remoteplace="txt.mqq.all",searchid=genSearchId(),search_type=0,query=keyword,page_num=1,num_per_page=20}}}
+  local url=MusicAPI.SearchUrl.."?data="..HttpService:UrlEncode(HttpService:JSONEncode(payload))
+  local resp=httpGet(url,{["User-Agent"]="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",["Referer"]="https://y.qq.com/"})
+  local data=HttpService:JSONDecode(resp)
+  local list=nil
+  if data and data.req_0 and data.req_0.data and data.req_0.data.body and data.req_0.data.body.song then list=data.req_0.data.body.song.list
+  elseif data and data.req and data.req.data and data.req.data.body and data.req.data.body.song then list=data.req.data.body.song.list end
+  if list then for _,item in ipairs(list)do local singerName="未知"if item.singer and item.singer[1]then singerName=item.singer[1].name or "未知"end table.insert(results,{mid=item.mid or item.songmid,name=item.name or item.songname or "未知",singer=singerName,album=(item.album and item.album.name) or ""})end end
+ end)
+ if not ok then warn("[Music] 搜索失败: "..tostring(err))end
+ return results
+end
+local function musicGetUrl(songmid,quality)
+ quality=quality or "320"
+ local url=nil
+ local ok,err=pcall(function()
+  local prefix="M500"local suffix=".mp3"
+  if quality=="320"then prefix="M800"elseif quality=="flac"then prefix="F000"suffix=".flac"end
+  local filename=prefix..songmid..songmid..suffix
+  local payload={req_0={module="vkey.GetVkeyServer",method="CgiGetVkey",param={filename={filename},guid="10000",songmid={songmid},songtype={0},uin="0",loginflag=1,platform="20"}},comm={uin=0,format="json",ct=19,cv=0}}
+  local body=HttpService:JSONEncode(payload)
+  local resp=httpPost(MusicAPI.VkeyUrl,body,{["User-Agent"]="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",["Referer"]="https://y.qq.com/",["Content-Type"]="application/json"})
+  local data=HttpService:JSONDecode(resp)
+  local sip=nil local midurlinfo=nil
+  if data and data.req_0 and data.req_0.data then sip=data.req_0.data.sip midurlinfo=data.req_0.data.midurlinfo
+  elseif data and data.req and data.req.data then sip=data.req.data.sip midurlinfo=data.req.data.midurlinfo end
+  if sip and midurlinfo and midurlinfo[1] and midurlinfo[1].purl~=""then url=sip[1]..midurlinfo[1].purl end
+ end)
+ if not ok then warn("[Music] 获取直链失败: "..tostring(err))end
+ return url
+end
+task.spawn(function()
+ while task.wait(0.1)do
+  local c=LP.Character
+  if c then local h=c:FindFirstChildOfClass("Humanoid")if h then
+   if CFG.Movement.Enabled then pcall(function()if h.WalkSpeed~=CFG.Movement.Speed then h.WalkSpeed=CFG.Movement.Speed end end)end
+   if CFG.Movement.JumpEnabled then pcall(function()if h.UseJumpPower then if h.JumpPower~=CFG.Movement.JumpPower then h.JumpPower=CFG.Movement.JumpPower end else local t=CFG.Movement.JumpPower/7.5 if math.abs((h.JumpHeight or 0)-t)>0.1 then h.JumpHeight=t end end end)end
+  end end
+ end
+end)
+local FallImmunity={Conn1=nil,Conn2=nil,WasFalling=false,BoundHum=nil}
+local function bindFallImmunity()
+ local char=LP.Character if not char then return end
+ local hum=char:FindFirstChildOfClass("Humanoid")if not hum then return end
+ if FallImmunity.Conn1 then pcall(function()FallImmunity.Conn1:Disconnect()end)end
+ if FallImmunity.Conn2 then pcall(function()FallImmunity.Conn2:Disconnect()end)end
+ FallImmunity.WasFalling=false
+ FallImmunity.BoundHum=hum
+ FallImmunity.Conn1=hum.StateChanged:Connect(function(_,newState)
+  if newState==Enum.HumanoidStateType.Freefall then FallImmunity.WasFalling=true
+  elseif FallImmunity.WasFalling and(newState==Enum.HumanoidStateType.Landed or newState==Enum.HumanoidStateType.Running or newState==Enum.HumanoidStateType.RunningNoPhysics or newState==Enum.HumanoidStateType.GettingUp)then
+   FallImmunity.WasFalling=false
+   if CFG.FallImmunity.Enabled and hum.Parent then pcall(function()hum.Health=hum.MaxHealth end)end
+  end
+ end)
+ FallImmunity.Conn2=hum.HealthChanged:Connect(function(hp)
+  if not CFG.FallImmunity.Enabled then return end
+  if FallImmunity.WasFalling and hum.Parent then pcall(function()hum.Health=hum.MaxHealth end)end
+ end)
+end
+LP.CharacterAdded:Connect(function()task.wait(0.3)bindFallImmunity()end)
+task.spawn(function()task.wait(0.5)bindFallImmunity()end)
+local jumpBtnHeld=false
+local function bindJumpBtn()
+ local pg=LP:FindFirstChildOfClass("PlayerGui")if not pg then return end
+ local tg=pg:FindFirstChild("TouchGui")if not tg then return end
+ local tc=tg:FindFirstChild("TouchControlFrame")if not tc then return end
+ local jb=tc:FindFirstChild("JumpButton")if not jb then return end
+ if jb:GetAttribute("_csgoBind")then return end
+ jb:SetAttribute("_csgoBind",true)
+ jb.InputBegan:Connect(function(i)if i.UserInputType==Enum.UserInputType.Touch then jumpBtnHeld=true end end)
+ jb.InputEnded:Connect(function(i)if i.UserInputType==Enum.UserInputType.Touch then jumpBtnHeld=false end end)
+end
+task.spawn(function()while task.wait(1)do pcall(bindJumpBtn)end end)
+task.spawn(function()
+ while true do
+  RunService.Stepped:Wait()
+  if not CFG.Movement.InfiniteJump then continue end
+  if CFG.Movement.FlyEnabled then continue end
+  local c=LP.Character if not c then continue end
+  local hrp=c:FindFirstChild("HumanoidRootPart")if not hrp then continue end
+  local pressed=UIS:IsKeyDown(Enum.KeyCode.Space) or jumpBtnHeld
+  if not pressed then continue end
+  local vel=hrp.AssemblyLinearVelocity
+  hrp.AssemblyLinearVelocity=Vector3.new(vel.X,55,vel.Z)
+ end
+end)
+local noclipBackup={}
+local noclipApplied=false
+local function applyNoClip()
+ local c=LP.Character if not c then return end
+ noclipBackup={}
+ for _,part in ipairs(c:GetDescendants())do if part:IsA("BasePart")then noclipBackup[part]=part.CanCollide pcall(function()part.CanCollide=false end)end end
+ noclipApplied=true
+end
+local function removeNoClip()
+ for part,orig in pairs(noclipBackup)do if part and part.Parent then pcall(function()part.CanCollide=orig end)end end
+ noclipBackup={}
+ noclipApplied=false
+end
+_G.__CSGO_NC_STUCK=0
+LP.CharacterAdded:Connect(function()noclipBackup={}noclipApplied=false _G.__CSGO_NC_STUCK=0 end)
+local NC={STEP=0.55,MAX_PROBE=80,MAX_LAYER=12,GAP_MIN=0.25,GAP_MAX=0.9,GAP_SLOPE=0.18,MAX_TP=22,PRE_CHECK=1.4,LAT_OFFSET=0.55,STUCK_LIMIT=90,STUCK_BACK=2.0}
+local HEIGHTS={1.5,0.0,-1.5}
+local function buildParams(char)
+ local p=RaycastParams.new()
+ p.FilterType=Enum.RaycastFilterType.Exclude
+ local list={char}
+ for _,plr in ipairs(Players:GetPlayers())do local c=plr.Character if c and c~=char then table.insert(list,c)end end
+ p.FilterDescendantsInstances=list
+ p.IgnoreWater=true
+ return p
+end
+local function probePath(origin,dir,dist,params)
+ local nearest=nil
+ for i,h in ipairs(HEIGHTS)do
+  local o=origin+Vector3.new(0,h,0)
+  local hit=WS:Raycast(o,dir*dist,params)
+  if hit and(not nearest or hit.Distance<nearest)then nearest=hit.Distance end
+  if i==2 then
+   local right=dir:Cross(Vector3.new(0,1,0))
+   if right.Magnitude>0.001 then right=right.Unit
+    for _,side in ipairs({1,-1})do local o2=o+right*(NC.LAT_OFFSET*side)local hit2=WS:Raycast(o2,dir*dist,params)if hit2 and(not nearest or hit2.Distance<nearest)then nearest=hit2.Distance end end
+   end
+  end
+ end
+ return nearest
+end
+local function setCrouch(hum,on)
+ if not hum then return end
+ local ok=pcall(function()if on then hum.HipHeight=(hum.HipHeight or 2)-0.35 else hum.HipHeight=(hum.HipHeight or 2)+0.35 end end)
+ if not ok then pcall(function()hum:ChangeState(on and Enum.HumanoidStateType.Climbing or Enum.HumanoidStateType.Running)end)end
+end
+local function findGap(origin,dir,params,hum)
+ local probe=origin local travelled=0 local sawLowHole=false
+ for _=1,NC.MAX_LAYER do
+  local remain=NC.MAX_PROBE-travelled
+  if remain<=0.1 then return nil,sawLowHole end
+  local hitDist=probePath(probe,dir,remain,params)
+  if not hitDist then return probe,sawLowHole end
+  local headHit=WS:Raycast(probe+Vector3.new(0,1.5,0),dir*remain,params)
+  local bodyHit=WS:Raycast(probe,dir*remain,params)
+  if headHit and not bodyHit then sawLowHole=true end
+  local gap=math.clamp(NC.GAP_MIN+hitDist*NC.GAP_SLOPE,NC.GAP_MIN,NC.GAP_MAX)
+  local step=hitDist+gap
+  probe=probe+dir*step
+  travelled=travelled+step
+ end
+ return nil,sawLowHole
+end
+task.spawn(function()
+ while true do
+  RunService.Stepped:Wait()
+  if not CFG.Movement.FlyNoClip then if noclipApplied then removeNoClip()end _G.__CSGO_NC_STUCK=0 continue end
+  local c=LP.Character if not c then continue end
+  local hrp=c:FindFirstChild("HumanoidRootPart")local hum=c:FindFirstChildOfClass("Humanoid")
+  if not hrp or not hum then continue end
+  if not noclipApplied then applyNoClip()end
+  local rawDir=hum.MoveDirection
+  if rawDir.Magnitude<0.01 then _G.__CSGO_NC_STUCK=0 continue end
+  local moveDir=Vector3.new(rawDir.X,0,rawDir.Z)
+  if moveDir.Magnitude<0.001 then _G.__CSGO_NC_STUCK=0 continue end
+  moveDir=moveDir.Unit
+  local params=buildParams(c)
+  if not probePath(hrp.Position,moveDir,NC.PRE_CHECK,params)then _G.__CSGO_NC_STUCK=0 setCrouch(hum,false)continue end
+  local gapPos,lowHole=findGap(hrp.Position,moveDir,params,hum)
+  setCrouch(hum,lowHole and true or false)
+  if gapPos then
+   _G.__CSGO_NC_STUCK=0
+   local delta=gapPos-hrp.Position
+   if delta.Magnitude>NC.MAX_TP then gapPos=hrp.Position+delta.Unit*NC.MAX_TP end
+   hrp.CFrame=hrp.CFrame-hrp.CFrame.Position+gapPos
+  else
+   _G.__CSGO_NC_STUCK=_G.__CSGO_NC_STUCK+1
+   if _G.__CSGO_NC_STUCK>=NC.STUCK_LIMIT then local back=hrp.Position-moveDir*NC.STUCK_BACK hrp.CFrame=hrp.CFrame-hrp.CFrame.Position+back _G.__CSGO_NC_STUCK=0
+   else local newPos=hrp.Position+moveDir*NC.STEP hrp.CFrame=hrp.CFrame-hrp.CFrame.Position+newPos end
+  end
+ end
+end)
+local FlyGui=Instance.new("ScreenGui")FlyGui.Name="CSGOFlyCtrl"FlyGui.ResetOnSpawn=false FlyGui.DisplayOrder=150 FlyGui.IgnoreGuiInset=true FlyGui.Parent=SG
+local Pad=Instance.new("Frame")Pad.Size=UDim2.new(0,180,0,180)Pad.Position=UDim2.new(1,-200,1,-200)Pad.BackgroundColor3=Color3.fromRGB(30,25,40)Pad.BackgroundTransparency=0.35 Pad.BorderSizePixel=0 Pad.Visible=false Pad.Parent=FlyGui
+Instance.new("UICorner",Pad).CornerRadius=UDim.new(1,0)
+local PadStroke=Instance.new("UIStroke")PadStroke.Color=Color3.fromRGB(255,120,180)PadStroke.Thickness=2 PadStroke.Transparency=0.5 PadStroke.Parent=Pad
+local flyDirUp=false local flyDirDown=false local flyDirLeft=false local flyDirRight=false
+local function mkFlyBtn(sym,pos)
+ local b=Instance.new("TextButton")b.Size=UDim2.new(0,52,0,52)b.Position=pos b.AnchorPoint=Vector2.new(0.5,0.5)
+ b.BackgroundColor3=Color3.fromRGB(50,45,65)b.BackgroundTransparency=0.2 b.Text=sym b.TextColor3=Color3.fromRGB(255,255,255)
+ b.Font=Enum.Font.GothamBold b.TextSize=22 b.BorderSizePixel=0 b.AutoButtonColor=false b.Parent=Pad
+ Instance.new("UICorner",b).CornerRadius=UDim.new(1,0)return b
+end
+local bUp=mkFlyBtn("▲",UDim2.new(0.5,0,0,40))
+local bDown=mkFlyBtn("▼",UDim2.new(0.5,0,1,-40))
+local bLeft=mkFlyBtn("◀",UDim2.new(0,40,0.5,0))
+local bRight=mkFlyBtn("▶",UDim2.new(1,-40,0.5,0))
+local function bindFlyBtn(b,setter)
+ b.InputBegan:Connect(function(i)if i.UserInputType==Enum.UserInputType.Touch or i.UserInputType==Enum.UserInputType.MouseButton1 then setter(true)b.BackgroundColor3=Color3.fromRGB(255,120,180)end end)
+ b.InputEnded:Connect(function(i)if i.UserInputType==Enum.UserInputType.Touch or i.UserInputType==Enum.UserInputType.MouseButton1 then setter(false)b.BackgroundColor3=Color3.fromRGB(50,45,65)end end)
+end
+bindFlyBtn(bUp,function(v)flyDirUp=v end)
+bindFlyBtn(bDown,function(v)flyDirDown=v end)
+bindFlyBtn(bLeft,function(v)flyDirLeft=v end)
+bindFlyBtn(bRight,function(v)flyDirRight=v end)
+local flyBV=nil local flyBG=nil local flyActive=false
+local function startFly()
+ local c=LP.Character if not c then return end
+ local hrp=c:FindFirstChild("HumanoidRootPart")
+ local hum=c:FindFirstChildOfClass("Humanoid")
+ if not hrp or not hum then return end
+ flyActive=true hum.PlatformStand=true
+ if not flyBV or not flyBV.Parent then flyBV=Instance.new("BodyVelocity")flyBV.MaxForce=Vector3.new(1e5,1e5,1e5)flyBV.Velocity=Vector3.new(0,0,0)flyBV.Parent=hrp end
+ if not flyBG or not flyBG.Parent then flyBG=Instance.new("BodyGyro")flyBG.MaxTorque=Vector3.new(1e5,1e5,1e5)flyBG.P=10000 flyBG.D=500 flyBG.CFrame=hrp.CFrame flyBG.Parent=hrp end
+end
+local function stopFly()
+ flyActive=false flyDirUp=false flyDirDown=false flyDirLeft=false flyDirRight=false
+ local c=LP.Character
+ if c then local hum=c:FindFirstChildOfClass("Humanoid")if hum then hum.PlatformStand=false end end
+ if flyBV then flyBV:Destroy()flyBV=nil end
+ if flyBG then flyBG:Destroy()flyBG=nil end
+end
+task.spawn(function()
+ while true do
+  RunService.RenderStepped:Wait()
+  if not CFG.Movement.FlyEnabled then if flyActive then stopFly()end if Pad.Visible then Pad.Visible=false end continue end
+  if not Pad.Visible then Pad.Visible=true end
+  local c=LP.Character if not c then if flyActive then stopFly()end continue end
+  local hrp=c:FindFirstChild("HumanoidRootPart")
+  local hum=c:FindFirstChildOfClass("Humanoid")
+  if not hrp or not hum then if flyActive then stopFly()end continue end
+  if not flyActive then startFly()end
+  if not flyBV or not flyBV.Parent then startFly()end
+  local cm=cam()if not cm then continue end
+  local camF=cm.CFrame.LookVector
+  local camR=cm.CFrame.RightVector
+  local camRH=Vector3.new(camR.X,0,camR.Z)
+  if camRH.Magnitude>0.001 then camRH=camRH.Unit else camRH=Vector3.new(1,0,0)end
+  local moveDir=hum.MoveDirection
+  local moveVel=Vector3.new(0,0,0)
+  if moveDir.Magnitude>0.01 then moveVel=moveDir*CFG.Movement.Speed end
+  local flyVel=Vector3.new(0,0,0)
+  if flyDirUp then flyVel=flyVel+Vector3.new(0,CFG.Movement.FlySpeed,0)end
+  if flyDirDown then flyVel=flyVel-Vector3.new(0,CFG.Movement.FlySpeed,0)end
+  if flyDirLeft then flyVel=flyVel-camRH*CFG.Movement.FlySpeed end
+  if flyDirRight then flyVel=flyVel+camRH*CFG.Movement.FlySpeed end
+  if UIS:IsKeyDown(Enum.KeyCode.Space)then flyVel=flyVel+Vector3.new(0,CFG.Movement.FlySpeed,0)end
+  if UIS:IsKeyDown(Enum.KeyCode.LeftShift)then flyVel=flyVel-Vector3.new(0,CFG.Movement.FlySpeed,0)end
+  local finalVel=moveVel+flyVel
+  if finalVel.Magnitude<0.01 then finalVel=Vector3.new(0,0,0)end
+  if flyBV and flyBV.Parent then flyBV.Velocity=finalVel end
+  if flyBG and flyBG.Parent then flyBG.CFrame=CFrame.new(hrp.Position,hrp.Position+camF)end
+ end
+end)
+local Observer={Bound=false}
+local function observerUpdate(dt)
+ if not CFG.Observer.Active then return end
+ local target=CFG.Observer.Target
+ if not target or not target.Parent then return end
+ local cm=cam()if not cm then return end
+ local tChar=target.Character if not tChar then return end
+ local tHead=tChar:FindFirstChild("Head")if not tHead then return end
+ local mode=CFG.Observer.Mode local offset=CFG.Observer.Offset local goal
+ if mode=="First"then goal=CFrame.new(tHead.Position,tHead.Position+tHead.CFrame.LookVector)
+ elseif mode=="Third"then local back=tHead.CFrame.LookVector*-(5+offset)goal=CFrame.lookAt(tHead.Position+back+Vector3.new(0,1.5,0),tHead.Position)
+ elseif mode=="Top"then goal=CFrame.lookAt(tHead.Position+Vector3.new(0,12+offset,0),tHead.Position)
+ elseif mode=="Side"then local right=tHead.CFrame.RightVector goal=CFrame.lookAt(tHead.Position+right*(5+offset)+Vector3.new(0,2,0),tHead.Position)
+ else return end
+ if CFG.Observer.Smooth then local alpha=math.min(dt*12,1)cm.CFrame=cm.CFrame:Lerp(goal,alpha)else cm.CFrame=goal end
+end
+local function startObserver(target,mode)
+ if not target then notify("观察者失败","未选择玩家")return end
+ local tChar=target.Character if not tChar then notify("观察者失败","目标角色未加载")return end
+ if not tChar:FindFirstChild("Head")then notify("观察者失败","找不到目标头部")return end
+ local cm=cam()if not cm then return end
+ CFG.Observer.Active=true CFG.Observer.Target=target
+ if mode then CFG.Observer.Mode=mode end
+ cm.CameraType=Enum.CameraType.Scriptable
+ if Observer.Bound then pcall(function()RunService:UnbindFromRenderStep("CSGO_Observer")end)end
+ RunService:BindToRenderStep("CSGO_Observer",Enum.RenderPriority.Camera.Value+1,observerUpdate)
+ Observer.Bound=true
+ notify("观察者模式","已锁定 "..target.Name.." · "..CFG.Observer.Mode)
+end
+local function stopObserver()
+ if not CFG.Observer.Active then return end
+ CFG.Observer.Active=false CFG.Observer.Target=nil
+ if Observer.Bound then pcall(function()RunService:UnbindFromRenderStep("CSGO_Observer")end)Observer.Bound=false end
+ local cm=cam()if cm then cm.CameraType=Enum.CameraType.Custom local myChar=LP.Character if myChar then local myHum=myChar:FindFirstChildOfClass("Humanoid")if myHum then cm.CameraSubject=myHum end end end
+ notify("观察者模式","已退出")
+end
+Players.PlayerRemoving:Connect(function(p)if CFG.Observer.Active and CFG.Observer.Target==p then stopObserver()notify("观察者","目标已离开，自动退出")end end)
+LP.CharacterAdded:Connect(function()if CFG.Observer.Active then stopObserver()end end)
+local SpinFlail={Active=false,BP=nil,BV=nil,BAV=nil,GodModeConn=nil,GodModeHum=nil,GodModeHealth=nil}
+local function startGodMode(myChar)
+ if not CFG.SpinFlail.GodMode then return end
+ local hum=myChar:FindFirstChildOfClass("Humanoid")if not hum then return end
+ SpinFlail.GodModeHum=hum SpinFlail.GodModeHealth=hum.Health
+ pcall(function()hum.Health=hum.MaxHealth end)
+ SpinFlail.GodModeConn=hum.HealthChanged:Connect(function(h)
+  if not SpinFlail.Active then return end
+  if not SpinFlail.GodModeHum or not SpinFlail.GodModeHum.Parent then return end
+  pcall(function()SpinFlail.GodModeHum.Health=SpinFlail.GodModeHum.MaxHealth end)
+ end)
+ hum.StateChanged:Connect(function(_,newState)
+  if not SpinFlail.Active then return end
+  if newState==Enum.HumanoidStateType.FallingDown or newState==Enum.HumanoidStateType.Dead then
+   if SpinFlail.GodModeHum and SpinFlail.GodModeHum.Parent then pcall(function()SpinFlail.GodModeHum.Health=SpinFlail.GodModeHum.MaxHealth end)end
+  end
+ end)
+end
+local function stopGodMode()
+ if SpinFlail.GodModeConn then pcall(function()SpinFlail.GodModeConn:Disconnect()end)SpinFlail.GodModeConn=nil end
+ if SpinFlail.GodModeHum and SpinFlail.GodModeHum.Parent then pcall(function()local target=math.max(SpinFlail.GodModeHum.Health,SpinFlail.GodModeHealth or SpinFlail.GodModeHum.MaxHealth)SpinFlail.GodModeHum.Health=target end)end
+ SpinFlail.GodModeHum=nil SpinFlail.GodModeHealth=nil
+end
+local function cleanupSpinFlail()
+ if SpinFlail.BP then pcall(function()SpinFlail.BP:Destroy()end)SpinFlail.BP=nil end
+ if SpinFlail.BV then pcall(function()SpinFlail.BV:Destroy()end)SpinFlail.BV=nil end
+ if SpinFlail.BAV then pcall(function()SpinFlail.BAV:Destroy()end)SpinFlail.BAV=nil end
+ local myChar=LP.Character
+ if myChar then
+  local myHum=myChar:FindFirstChildOfClass("Humanoid")if myHum then pcall(function()myHum.PlatformStand=false end)end
+  local myHrp=myChar:FindFirstChild("HumanoidRootPart")if myHrp then pcall(function()myHrp.CustomPhysicalProperties=nil end)end
+ end
+ stopGodMode()
+ SpinFlail.Active=false
+end
+local function spinFlailPlayer(target)
+ if not target then notify("甩飞失败","未选择玩家")return end
+ if SpinFlail.Active then notify("甩飞进行中","上一次还没结束")return end
+ local tChar=target.Character if not tChar then notify("甩飞失败","目标角色未加载")return end
+ local tHrp=tChar:FindFirstChild("HumanoidRootPart")if not tHrp then notify("甩飞失败","找不到目标 HRP")return end
+ local myChar=LP.Character if not myChar then notify("甩飞失败","你的角色未加载")return end
+ local myHrp=myChar:FindFirstChild("HumanoidRootPart")if not myHrp then notify("甩飞失败","找不到自身 HRP")return end
+ local s=math.clamp(CFG.SpinFlail.Strength,1,10)
+ local speed=s*80 local bpP=5000+s*2500 local massBoost=1+s*5 local spinSpeed=CFG.SpinFlail.SpinSpeed local duration=CFG.SpinFlail.Duration local interval=1/(8+s*3)
+ SpinFlail.Active=true
+ task.spawn(function()
+  for _,p in ipairs(myChar:GetDescendants())do if p:IsA("BasePart")then pcall(function()p.CanCollide=true p.Massless=false end)end end
+  pcall(function()local props=PhysicalProperties.new(1.0*massBoost,0.3,0.5,1,1)myHrp.CustomPhysicalProperties=props for _,p in ipairs(myChar:GetDescendants())do if p:IsA("BasePart")and p~=myHrp then pcall(function()p.CustomPhysicalProperties=PhysicalProperties.new(1.0*massBoost,0.3,0.5,1,1)end)end end end)
+  local myHum=myChar:FindFirstChildOfClass("Humanoid")if myHum then pcall(function()myHum.PlatformStand=true end)end
+  startGodMode(myChar)
+  local bp=Instance.new("BodyPosition")bp.Name="_SpinFlailBP"bp.MaxForce=Vector3.new(1e7,1e7,1e7)bp.P=bpP bp.D=bpP*0.05 bp.Position=myHrp.Position bp.Parent=myHrp SpinFlail.BP=bp
+  local bv=Instance.new("BodyVelocity")bv.Name="_SpinFlailBV"bv.MaxForce=Vector3.new(1e6,1e6,1e6)bv.Velocity=Vector3.new(0,0,0)bv.Parent=myHrp SpinFlail.BV=bv
+  local bav=Instance.new("BodyAngularVelocity")bav.Name="_SpinFlailBAV"bav.MaxTorque=Vector3.new(1e6,1e6,1e6)bav.AngularVelocity=Vector3.new(0,spinSpeed,0)bav.Parent=myHrp SpinFlail.BAV=bav
+  local t0=tick()local lastStrike=-999
+  while SpinFlail.Active and(tick()-t0<duration)do
+   if not myHrp.Parent or not tHrp.Parent then break end
+   if CFG.SpinFlail.GodMode and myHum and myHum.Parent then if myHum.Health<myHum.MaxHealth then pcall(function()myHum.Health=myHum.MaxHealth end)end end
+   local now=tick()local tPos=tHrp.Position
+   local tHum=tChar:FindFirstChildOfClass("Humanoid")
+   local isRagdolled=false
+   if tHum then local state=tHum:GetState()if state==Enum.HumanoidStateType.Physics or state==Enum.HumanoidStateType.FallingDown or state==Enum.HumanoidStateType.Ragdoll then isRagdolled=true end end
+   local dir=tPos-myHrp.Position
+   if dir.Magnitude<0.1 then dir=Vector3.new(0,1,0)end
+   dir=dir.Unit
+   local strikeDir=(dir+Vector3.new(0,0.6,0)).Unit
+   bp.Position=tPos+Vector3.new(0,1,0)
+   local boost=isRagdolled and 1.5 or 1.0
+   bv.Velocity=strikeDir*speed*boost
+   bav.AngularVelocity=Vector3.new(math.random(-spinSpeed,spinSpeed),spinSpeed,math.random(-spinSpeed,spinSpeed))
+   if now-lastStrike>=interval then lastStrike=now local backPos=tPos-strikeDir*2.5+Vector3.new(0,1,0)bp.Position=backPos end
+   RunService.Stepped:Wait()
+  end
+  cleanupSpinFlail()
+  notify("甩击结束","连击结束")
+ end)
+ local gmText=CFG.SpinFlail.GodMode and "（无敌已开启）" or ""
+ notify("甩击启动","强度 "..CFG.SpinFlail.Strength.." → "..target.Name..gmText)
+end
+local MarkGui=Instance.new("ScreenGui")MarkGui.Name="CSGOMarkTP"MarkGui.ResetOnSpawn=false MarkGui.DisplayOrder=160 MarkGui.IgnoreGuiInset=true MarkGui.Parent=SG
+local Marker=Instance.new("Frame")Marker.Size=UDim2.new(0,40,0,40)Marker.AnchorPoint=Vector2.new(0.5,0.5)Marker.BackgroundTransparency=1 Marker.Visible=false Marker.Parent=MarkGui
+local MCircle=Instance.new("Frame")MCircle.Size=UDim2.new(1,0,1,0)MCircle.AnchorPoint=Vector2.new(0.5,0.5)MCircle.Position=UDim2.new(0.5,0,0.5,0)
+MCircle.BackgroundTransparency=0.5 MCircle.BackgroundColor3=Color3.fromRGB(255,120,180)MCircle.BorderSizePixel=0 MCircle.Parent=Marker
+Instance.new("UICorner",MCircle).CornerRadius=UDim.new(1,0)
+local MDot=Instance.new("Frame")MDot.Size=UDim2.new(0,8,0,8)MDot.AnchorPoint=Vector2.new(0.5,0.5)MDot.Position=UDim2.new(0.5,0,0.5,0)
+MDot.BackgroundColor3=Color3.fromRGB(255,255,255)MDot.BorderSizePixel=0 MDot.Parent=Marker
+Instance.new("UICorner",MDot).CornerRadius=UDim.new(1,0)
+local function doMarkTeleport(sx,sy)
+ local cm=cam()if not cm then return end
+ local myChar=LP.Character if not myChar then return end
+ local myRoot=myChar:FindFirstChild("HumanoidRootPart")if not myRoot then return end
+ local ray=cm:ViewportPointToRay(sx,sy)
+ local params=RaycastParams.new()
+ params.FilterType=Enum.RaycastFilterType.Exclude
+ params.FilterDescendantsInstances={myChar}
+ params.IgnoreWater=true
+ local result=WS:Raycast(ray.Origin,ray.Direction*5000,params)
+ local pos=result and result.Position or(ray.Origin+ray.Direction*500)
+ myRoot.CFrame=CFrame.new(pos+Vector3.new(0,3,0))
+ if CFG.MarkTP.ShowMarker then local sp,onScreen=cm:WorldToViewportPoint(pos)if onScreen then Marker.Position=UDim2.new(0,sp.X,0,sp.Y)Marker.Visible=true task.delay(1.2,function()if Marker then Marker.Visible=false end end)end end
+ notify("标点传送","已传送到点击位置")
+end
+UIS.InputBegan:Connect(function(i,gp)
+ if gp then return end
+ if not CFG.MarkTP.Enabled then return end
+ if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then doMarkTeleport(i.Position.X,i.Position.Y)end
+end)
+local disguiseState={ClientMode=false,FakeBody=nil,NameGui=nil,SyncThread=nil,BackupParts=nil}
+local function cleanupClientDisguise()
+ if disguiseState.FakeBody then pcall(function()disguiseState.FakeBody:Destroy()end)disguiseState.FakeBody=nil end
+ if disguiseState.NameGui then pcall(function()disguiseState.NameGui:Destroy()end)disguiseState.NameGui=nil end
+ if disguiseState.BackupParts then for part,data in pairs(disguiseState.BackupParts)do if part and part.Parent then pcall(function()if data.MeshId and part:IsA("MeshPart")then part.MeshId=data.MeshId end if data.TextureID and part:IsA("MeshPart")then part.TextureID=data.TextureID end if data.Color then part.Color=data.Color end if data.Material then part.Material=data.Material end end)end end disguiseState.BackupParts=nil end
+ local myChar=LP.Character
+ if myChar then for _,part in ipairs(myChar:GetDescendants())do if part:IsA("BasePart")then pcall(function()part.LocalTransparencyModifier=0 end)end end end
+ disguiseState.ClientMode=false
+end
+local function tryCloneDisguise(target)
+ local myChar=LP.Character local tgtChar=target.Character
+ if not myChar or not tgtChar then return false,"角色未加载"end
+ for _,part in ipairs(myChar:GetDescendants())do if part:IsA("BasePart")then pcall(function()part.LocalTransparencyModifier=1 end)end end
+ local ok,result=pcall(function()
+  local fake=tgtChar:Clone()
+  if not fake then error("Clone 返回空")end
+  fake.Name="_Fk"..math.random(100000,999999)
+  local toRemove={}
+  for _,obj in ipairs(fake:GetDescendants())do
+   if obj:IsA("Script")or obj:IsA("LocalScript")or obj:IsA("ModuleScript")or obj:IsA("Humanoid")then table.insert(toRemove,obj)
+   elseif obj:IsA("BasePart")then pcall(function()obj.CanCollide=false obj.CanQuery=false obj.CanTouch=false obj.Massless=true obj.Anchored=false obj.Locked=true end)end
+  end
+  for _,obj in ipairs(toRemove)do pcall(function()obj:Destroy()end)end
+  fake.Parent=WS disguiseState.FakeBody=fake disguiseState.ClientMode=true
+  disguiseState.SyncThread=task.spawn(function()
+   while disguiseState.FakeBody and disgu
