@@ -1,10 +1,10 @@
 local CG=game:GetService("CoreGui")
-当地的PG=game:GetService("Player")。LocalPlayer:FindFirstChildOfClass("PlayerGui")
-当地的KILL_EXACT={"CSGOAssistUI","CSGOFOVCircle","CSGOESP","CSGOFloatBtn","CSGOInfoHUD","CSGONotify","CSGOFlyCtrl","CSGOMarkTP","WindUI_Example","CSGO_Menu"}
-当地的kill_KEYWORDS={"csgoassist"，"csgoesp"，"csgofloat"，"csgofovcircle"，"csgoflyctrl"，"csgomarktp"，"csgonotify"，"csgoinfo"，"csgo_menu"}
-局部函数是mygui(g)局部n=g.名称：lower()for_，kw in ipairs(KILL_KEYWORDS)do如果n:find(kw，1，true)则返回true结束返回假结束
-local_killed=0
-本地函数safeClean(容器)如果不是容器，则在ipairs中为_，G返回端(container:GetChildren())do pcall(函数()如果G:Isa("ScreenGui")，则本地准确的=_为false，名称在ipairs中(KILL_EXACT)执行如果g.Name==名称则exact=true中断结束如果exact或isMyGui(g)则g：销毁()_killed=_killed+1结束结束结束)
+local PG=game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
+local KILL_EXACT={"CSGOAssistUI","CSGOFOVCircle","CSGOESP","CSGOFloatBtn","CSGOInfoHUD","CSGONotify","CSGOFlyCtrl","CSGOMarkTP","WindUI_Example","CSGO_Menu"}
+local KILL_KEYWORDS={"csgoassist","csgoesp","csgofloat","csgofovcircle","csgoflyctrl","csgomarktp","csgonotify","csgoinfo","csgo_menu"}
+local function isMyGui(g)local n=g.Name:lower()for _,kw in ipairs(KILL_KEYWORDS)do if n:find(kw,1,true)then return true end end return false end
+local _killed=0
+local function safeClean(container)if not container then return end for _,g in ipairs(container:GetChildren())do pcall(function()if g:IsA("ScreenGui")then local exact=false for _,name in ipairs(KILL_EXACT)do if g.Name==name then exact=true break end end if exact or isMyGui(g)then g:Destroy()_killed=_killed+1 end end end)end end
 safeClean(CG)safeClean(PG)
 task.wait(0.15)
 local SG=PG or CG
@@ -25,6 +25,7 @@ local USE_PROXY=(PROXY_CONFIG.ROOT~="" and PROXY_CONFIG.ACCESS_KEY~="")
 local CFG={
  Aimbot={Enabled=false,Smoothness=5,FOV=150,Range=500,TeamCheck=true,HideTeammate=true,WallCheck=true,NearestPriority=false,ShowTargetDist=true},
  Movement={Enabled=false,Speed=32,JumpEnabled=false,JumpPower=50,InfiniteJump=false,FlyEnabled=false,FlySpeed=60,FlyNoClip=false},
+ FallImmunity={Enabled=false},
  MarkTP={Enabled=false,ShowMarker=true},
  SpinFlail={Target=nil,Strength=5,Duration=3.0,SpinSpeed=80,GodMode=true},
  Observer={Target=nil,Mode="Third",Offset=6,Smooth=true,Active=false},
@@ -144,6 +145,28 @@ task.spawn(function()
   end end
  end
 end)
+local FallImmunity={Conn1=nil,Conn2=nil,WasFalling=false,BoundHum=nil}
+local function bindFallImmunity()
+ local char=LP.Character if not char then return end
+ local hum=char:FindFirstChildOfClass("Humanoid")if not hum then return end
+ if FallImmunity.Conn1 then pcall(function()FallImmunity.Conn1:Disconnect()end)end
+ if FallImmunity.Conn2 then pcall(function()FallImmunity.Conn2:Disconnect()end)end
+ FallImmunity.WasFalling=false
+ FallImmunity.BoundHum=hum
+ FallImmunity.Conn1=hum.StateChanged:Connect(function(_,newState)
+  if newState==Enum.HumanoidStateType.Freefall then FallImmunity.WasFalling=true
+  elseif FallImmunity.WasFalling and(newState==Enum.HumanoidStateType.Landed or newState==Enum.HumanoidStateType.Running or newState==Enum.HumanoidStateType.RunningNoPhysics or newState==Enum.HumanoidStateType.GettingUp)then
+   FallImmunity.WasFalling=false
+   if CFG.FallImmunity.Enabled and hum.Parent then pcall(function()hum.Health=hum.MaxHealth end)end
+  end
+ end)
+ FallImmunity.Conn2=hum.HealthChanged:Connect(function(hp)
+  if not CFG.FallImmunity.Enabled then return end
+  if FallImmunity.WasFalling and hum.Parent then pcall(function()hum.Health=hum.MaxHealth end)end
+ end)
+end
+LP.CharacterAdded:Connect(function()task.wait(0.3)bindFallImmunity()end)
+task.spawn(function()task.wait(0.5)bindFallImmunity()end)
 local jumpBtnHeld=false
 local function bindJumpBtn()
  local pg=LP:FindFirstChildOfClass("PlayerGui")if not pg then return end
@@ -422,102 +445,84 @@ local function spinFlailPlayer(target)
   local myHum=myChar:FindFirstChildOfClass("Humanoid")if myHum then pcall(function()myHum.PlatformStand=true end)end
   startGodMode(myChar)
   local bp=Instance.new("BodyPosition")bp.Name="_SpinFlailBP"bp.MaxForce=Vector3.new(1e7,1e7,1e7)bp.P=bpP bp.D=bpP*0.05 bp.Position=myHrp.Position bp.Parent=myHrp SpinFlail.BP=bp
-当地的BV=Instance.New("BodyVelocity")bv.name="_SpinFlailBV"bv.Maxforce=Vector3.新的(1e6，1e6，1e6)v.速度=矢量3.新的(0，0，0)v.parent=myHrp SpinFlail.BV=bv
-局部bav=Instance.new("BodyAngularVelocity")bav.Name="_SpinFlailBAV"bav.MaxTorque=Vector3.new(1e6,1e6,1e6)bav.AngularVelocity=Vector3.new(0,spinSpeed,0)bav.Parent=myHrp SpinFlail.BAV=bav
-local t0=tick()local LastStrike=-999
-而SpinFlail.Active和(tick()-t0<持续时间)执行
-如果不是myHrp.Parent或不是tHrp.Parent，则中断结束
-如果CFG.SpinFlail.GodMode和myhum和myHum.Parent，则如果myHum.Health<myHum.MaxHealth，则pcall(函数()myHum.Health=myHum.MaxHealth结束)结束
-local now=tick()local TPOs=tHrp.Position
-local tHum=tChar:FindFirstChildOfClass("Humanoid")
-本地isRagdolled=false
-如果Thum，则本地状态=Thum:getState()如果state==枚举.HumanoidStateType.Physics或state==枚举.HumanoidStateType.FallingDown或state==枚举.HumanoidStateType.Ragdoll，则为ragdollled=true结束
-本地目录=tPos-myHrp.Position
-如果dir.Magnitude<0.1，则dir=Vector3.new(0，1，0)结束
-Dir=dir.Unit
-局部strikeDir=(dir+Vector3.new(0，0.6，0)).Unit
-bp.Position=TPOs+Vector3.new(0，1，0)
-局部升压=isRagdollled和1.5或1.0
-bv.Velocity=strikeDir*speed*boost
-BAV.角度速度=矢量3。新(数学。随机(-spinSpeed，spinSpeed)，spinSpeed，数学。随机(-spinSpeed，spinSpeed))
-如果now-lastStrike>=间隔，则LastStrike=现在局部backPos=tPos-strikeDir*2.5+矢量3.新(0，1，0)bp。位置=backPos结束
-RunService.Steped:Wait()
-结束
-cleanupSpinFlail()
-通知("甩击结束"，"连击结束")
-结束)
-本地gmText=CFG.SpinFlail.GodMode和"（无敌已启启）"或""
-通知("甩击启动"，"强度"..CFG.SpinFlail.力量。。“→”。。目标。姓名。。gmText)
-结束
-当地的MarkGuui=实例.新建("ScreenGuui")MarkGuui。Name="CSGOMarkTP"MarkGuui。ResetOnSpawn=false MarkGui.DisplayOrder=160MarkGui.IgnoreGuiInset=trueMarkGui.父级=SG
-当地的标记=实例。新(“帧”)标记。大小=UDim2。新(0，40，0，40)标记。anchorpoint=Vector2。新(0.5，0.5)标记。BackgroundTransparency=1标记.可见=false标记。父代=MarkGuui
-当地的MCircle=实例。新("帧")MC圆形.大小=UDim2.新(1，0，1，0)MC圆形.锚点=矢量2。新(0.5，0.5)MC圆形.位置=UDim2.新(0.5，0，0。5，0)
-MCircle.BroundTransparency=0。5MCircle。BackgroundColor3=Color3。来自RGB(255，120，180)MCircle。BorderSizePixel=0MCircle。父代=标记
-实例。新建("UIC角"，MCircle).角半径=UDIM.新建(1，0)
-当地的MDOT=实例.新("框架")MDOT.尺寸=UDim2.new(0，8，0，8)MDOT.anchorpoint=Vector2。5，0.5)MDOT.位置=UDim2.新(0.5，0，0。5，0)
-MDOT.BroundColor3=Color3。fromRGB(255，255，255)MDOT.BorderSizePixel=0MDOT.Parent=标记
-实例，新建。("UICorner"，MDOT).CornerRadius=UDIM。新建(1，0)
-本地函数doMarkTeleport(sx，sy)
-局部cm=凸轮()如果不是cm，则返回端
-本地MyChar=LP.Character如果不是MyChar，则返回end
-当地的myroot=myChar:FindFirstChild("HumanoidRootPart")如果不是myroot，则返回end
-本地Ray=cm:ViewportPointToRay(sx，sy)
-本地参数=RaycastParams.new()
-params.FilterType=枚举.RaycastFilterType。排除
-params.Filter后代实例={mychar}
-params.IgnoreWater=true
-当地的结果=WS:Raycast(射线.原点，射线.方向*5000，参数)
-局部位置=结果和结果位置或(ray.Origin+ray.Direction*500)
-myroot.cframe=cframe.new(pos+Vector3.新(0，3，0))
-如果CFG.MarkTP.ShowMarker，则本地SP，onScreen=cm:WorldToViewportPoint(pos)如果在屏幕上，则标记。位置=UDim2.new(0，sp.X，0，sp.y)标记。可见=真任务.延迟(1.2，功能()如果标记则为Marker.visible=false结束结束)结束
-通知("标点传送"，"已传送到点击位置")
-结束
-UIS.InputBegan:Connect(函数(i，gp)
-如果gp，则返回结束
-如果未启用CFG.MarkTP.，则返回结束
-如果我。UserInputType==枚举。UserInputType。鼠标按钮1或i.UserInputType==枚举。UserInputType。触摸，然后doMarkTeleport(i.Position.X，i.Position.Y)结束
-结束)
-当地的伪装状态={clientmode=false，FakeBody=nil，NameGui=nil，SyncThread=nil，备份部件=nil}
-局部函数cleanupClientDiguise()
-如果伪装状态.FakeBody，则pcall(函数()伪装状态.FakeBody：销毁()结束)伪装状态。FakeBody=零结束
-如果是伪装状态.NameGui，则pcall(函数()伪装状态.NameGuui：销毁()结束)伪装状态。NameGui=nil结束
-如果是admostmentState.BackupParts，那么对于part，成对数据(admostmentState.BackupParts)在part和part中执行.父，然后pcall(函数()if数据。MeshId和零件：Isa("网格零件")，然后是part.MeshId=data.如果是data，则是MeshId结束。TextureId和零件：Isa("网格零件")，然后是part.TextureID=data.如果是data，则是TextureId结束。颜色，然后是部分。颜色=数据。如果是数据，则颜色结束。材料，然后是零件。材料=数据。材料结束结束)结束伪装状态。备份零件=零结束
-本地MyChar=LP.Character
-如果MyChar则对于_，零件在ipairs(myChar:GetDescendants())中执行如果part:Isa("BasePart")则pcall(函数()part.LocalTransparencyModifier=0end)结束结束
-伪装状态.clientmode=false
-结束
-本地函数tryclonedisguise(目标)
-本地MyChar=LP。字符本地tgtChar=目标。字符
-如果不是MyChar或tgtChar，则返回false，"角色未加载"end
+  local bv=Instance.new("BodyVelocity")bv.Name="_SpinFlailBV"bv.MaxForce=Vector3.new(1e6,1e6,1e6)bv.Velocity=Vector3.new(0,0,0)bv.Parent=myHrp SpinFlail.BV=bv
+  local bav=Instance.new("BodyAngularVelocity")bav.Name="_SpinFlailBAV"bav.MaxTorque=Vector3.new(1e6,1e6,1e6)bav.AngularVelocity=Vector3.new(0,spinSpeed,0)bav.Parent=myHrp SpinFlail.BAV=bav
+  local t0=tick()local lastStrike=-999
+  while SpinFlail.Active and(tick()-t0<duration)do
+   if not myHrp.Parent or not tHrp.Parent then break end
+   if CFG.SpinFlail.GodMode and myHum and myHum.Parent then if myHum.Health<myHum.MaxHealth then pcall(function()myHum.Health=myHum.MaxHealth end)end end
+   local now=tick()local tPos=tHrp.Position
+   local tHum=tChar:FindFirstChildOfClass("Humanoid")
+   local isRagdolled=false
+   if tHum then local state=tHum:GetState()if state==Enum.HumanoidStateType.Physics or state==Enum.HumanoidStateType.FallingDown or state==Enum.HumanoidStateType.Ragdoll then isRagdolled=true end end
+   local dir=tPos-myHrp.Position
+   if dir.Magnitude<0.1 then dir=Vector3.new(0,1,0)end
+   dir=dir.Unit
+   local strikeDir=(dir+Vector3.new(0,0.6,0)).Unit
+   bp.Position=tPos+Vector3.new(0,1,0)
+   local boost=isRagdolled and 1.5 or 1.0
+   bv.Velocity=strikeDir*speed*boost
+   bav.AngularVelocity=Vector3.new(math.random(-spinSpeed,spinSpeed),spinSpeed,math.random(-spinSpeed,spinSpeed))
+   if now-lastStrike>=interval then lastStrike=now local backPos=tPos-strikeDir*2.5+Vector3.new(0,1,0)bp.Position=backPos end
+   RunService.Stepped:Wait()
+  end
+  cleanupSpinFlail()
+  notify("甩击结束","连击结束")
+ end)
+ local gmText=CFG.SpinFlail.GodMode and "（无敌已开启）" or ""
+ notify("甩击启动","强度 "..CFG.SpinFlail.Strength.." → "..target.Name..gmText)
+end
+local MarkGui=Instance.new("ScreenGui")MarkGui.Name="CSGOMarkTP"MarkGui.ResetOnSpawn=false MarkGui.DisplayOrder=160 MarkGui.IgnoreGuiInset=true MarkGui.Parent=SG
+local Marker=Instance.new("Frame")Marker.Size=UDim2.new(0,40,0,40)Marker.AnchorPoint=Vector2.new(0.5,0.5)Marker.BackgroundTransparency=1 Marker.Visible=false Marker.Parent=MarkGui
+local MCircle=Instance.new("Frame")MCircle.Size=UDim2.new(1,0,1,0)MCircle.AnchorPoint=Vector2.new(0.5,0.5)MCircle.Position=UDim2.new(0.5,0,0.5,0)
+MCircle.BackgroundTransparency=0.5 MCircle.BackgroundColor3=Color3.fromRGB(255,120,180)MCircle.BorderSizePixel=0 MCircle.Parent=Marker
+Instance.new("UICorner",MCircle).CornerRadius=UDim.new(1,0)
+local MDot=Instance.new("Frame")MDot.Size=UDim2.new(0,8,0,8)MDot.AnchorPoint=Vector2.new(0.5,0.5)MDot.Position=UDim2.new(0.5,0,0.5,0)
+MDot.BackgroundColor3=Color3.fromRGB(255,255,255)MDot.BorderSizePixel=0 MDot.Parent=Marker
+Instance.new("UICorner",MDot).CornerRadius=UDim.new(1,0)
+local function doMarkTeleport(sx,sy)
+ local cm=cam()if not cm then return end
+ local myChar=LP.Character if not myChar then return end
+ local myRoot=myChar:FindFirstChild("HumanoidRootPart")if not myRoot then return end
+ local ray=cm:ViewportPointToRay(sx,sy)
+ local params=RaycastParams.new()
+ params.FilterType=Enum.RaycastFilterType.Exclude
+ params.FilterDescendantsInstances={myChar}
+ params.IgnoreWater=true
+ local result=WS:Raycast(ray.Origin,ray.Direction*5000,params)
+ local pos=result and result.Position or(ray.Origin+ray.Direction*500)
+ myRoot.CFrame=CFrame.new(pos+Vector3.new(0,3,0))
+ if CFG.MarkTP.ShowMarker then local sp,onScreen=cm:WorldToViewportPoint(pos)if onScreen then Marker.Position=UDim2.new(0,sp.X,0,sp.Y)Marker.Visible=true task.delay(1.2,function()if Marker then Marker.Visible=false end end)end end
+ notify("标点传送","已传送到点击位置")
+end
+UIS.InputBegan:Connect(function(i,gp)
+ if gp then return end
+ if not CFG.MarkTP.Enabled then return end
+ if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then doMarkTeleport(i.Position.X,i.Position.Y)end
+end)
+local disguiseState={ClientMode=false,FakeBody=nil,NameGui=nil,SyncThread=nil,BackupParts=nil}
+local function cleanupClientDisguise()
+ if disguiseState.FakeBody then pcall(function()disguiseState.FakeBody:Destroy()end)disguiseState.FakeBody=nil end
+ if disguiseState.NameGui then pcall(function()disguiseState.NameGui:Destroy()end)disguiseState.NameGui=nil end
+ if disguiseState.BackupParts then for part,data in pairs(disguiseState.BackupParts)do if part and part.Parent then pcall(function()if data.MeshId and part:IsA("MeshPart")then part.MeshId=data.MeshId end if data.TextureID and part:IsA("MeshPart")then part.TextureID=data.TextureID end if data.Color then part.Color=data.Color end if data.Material then part.Material=data.Material end end)end end disguiseState.BackupParts=nil end
+ local myChar=LP.Character
+ if myChar then for _,part in ipairs(myChar:GetDescendants())do if part:IsA("BasePart")then pcall(function()part.LocalTransparencyModifier=0 end)end end end
+ disguiseState.ClientMode=false
+end
+local function tryCloneDisguise(target)
+ local myChar=LP.Character local tgtChar=target.Character
+ if not myChar or not tgtChar then return false,"角色未加载"end
  for _,part in ipairs(myChar:GetDescendants())do if part:IsA("BasePart")then pcall(function()part.LocalTransparencyModifier=1 end)end end
-本地正常，结果=pcall(函数()
-本地fake=tgtChar:Clone()
-如果不是fake，则错误("克隆返回空")结束
-fake.Name="_Fk"..math.random(100000，999999)
-本地toremove={}
+ local ok,result=pcall(function()
+  local fake=tgtChar:Clone()
+  if not fake then error("Clone 返回空")end
+  fake.Name="_Fk"..math.random(100000,999999)
+  local toRemove={}
   for _,obj in ipairs(fake:GetDescendants())do
-如果obj:Isa("Script")或obj:Isa("LocalScript")或obj:Isa("ModuleScript")或obj:Isa("Humanoid")，则table.插入(删除，对象)
-elseif obj:Isa(“BasePart”)，然后pcall(函数()obj.CanCollide=false obj.CanQuery=false obj.CanTouch=false obj.Massless=true obj.Anchored=false obj.Locked=true end)结束
-结束
-for_，obj in ipairs(toremove)do pcall(函数()obj:Destroy()end)end
-fake.Parent=WS伪装状态.FakeBody=伪装状态.clientmode=true
-伪装状态.SyncThread=任务.派生(函数()
-当admostmentState.FakeBody和admostState.FakeBody.父执行RunService.RenderSteped:Wait()local FakeBody然后pcall(函数()admostmentState.FakeBody:PivotTo(c:GetPivot())结束)结束结束
-结束)
-结束)
-如果notok，那么在ipairs(myChar:GetDescendants())中为_，part做如果part:Isa("BasePart")，那么pcall(函数()part.LocalTransparencyModifier=0end)end end返回false，tosstring(result)end
-返回true
-结束
-局部函数dodisguise(目标)
-如果不是目标，则通知("伪装失败"，"未选择玩家")返回假端
-本地MyChar=LP。字符本地tgtChar=目标。字符
-如果不是myChar，则通知("伪装失败"，"你的角色未加载")返回假端
-如果不是tgtChar，则通知("伪装失败"，"目标角色未加载")返回假端
-本地的myhum=myChar:FindFirstChildOfClass("Humanoid")本地tgtHum=tgtChar:FindFirstChildOfClass("类人")
-如果不是myhum或不是tgtHum，则通知("伪装失败"，"找不到仿人")返回假结束
-如果不是CFG.Disguise.OriginalDescription，然后本地OK，desc=pcall(函数()返回myhum:GetAppliedDescription()end)如果ok并desc，则CFG.Disguise.OriginalDescription=描述结束
-本地应用=假的
-本地OK，desc2=pcall(函数()返回tgtHum:GetAppliedDescription()结束)
-如果确定且desc2，则applied=pcall(函数()myhum:ApplyDescription(desc2)end)结束
-本地fakename=target.DisplayName如果不是fakename或fakename==""，则fakename=target.Name结束
-pcall(函数()myHum.DisplayN
+   if obj:IsA("Script")or obj:IsA("LocalScript")or obj:IsA("ModuleScript")or obj:IsA("Humanoid")then table.insert(toRemove,obj)
+   elseif obj:IsA("BasePart")then pcall(function()obj.CanCollide=false obj.CanQuery=false obj.CanTouch=false obj.Massless=true obj.Anchored=false obj.Locked=true end)end
+  end
+  for _,obj in ipairs(toRemove)do pcall(function()obj:Destroy()end)end
+  fake.Parent=WS disguiseState.FakeBody=fake disguiseState.ClientMode=true
+  disguiseState.SyncThread=task.spawn(function()
+   while disguiseState.FakeBody and disgu
