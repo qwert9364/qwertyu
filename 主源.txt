@@ -1,10 +1,10 @@
 local CG=game:GetService("CoreGui")
-local PG=game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
-local KILL_EXACT={"CSGOAssistUI","CSGOFOVCircle","CSGOESP","CSGOFloatBtn","CSGOInfoHUD","CSGONotify","CSGOFlyCtrl","CSGOMarkTP","WindUI_Example","CSGO_Menu"}
-local KILL_KEYWORDS={"csgoassist","csgoesp","csgofloat","csgofovcircle","csgoflyctrl","csgomarktp","csgonotify","csgoinfo","csgo_menu"}
-local function isMyGui(g)local n=g.Name:lower()for _,kw in ipairs(KILL_KEYWORDS)do if n:find(kw,1,true)then return true end end return false end
-local _killed=0
-local function safeClean(container)if not container then return end for _,g in ipairs(container:GetChildren())do pcall(function()if g:IsA("ScreenGui")then local exact=false for _,name in ipairs(KILL_EXACT)do if g.Name==name then exact=true break end end if exact or isMyGui(g)then g:Destroy()_killed=_killed+1 end end end)end end
+当地的PG=game:GetService("Player")。LocalPlayer:FindFirstChildOfClass("PlayerGui")
+当地的KILL_EXACT={"CSGOAssistUI","CSGOFOVCircle","CSGOESP","CSGOFloatBtn","CSGOInfoHUD","CSGONotify","CSGOFlyCtrl","CSGOMarkTP","WindUI_Example","CSGO_Menu"}
+当地的kill_KEYWORDS={"csgoassist"，"csgoesp"，"csgofloat"，"csgofovcircle"，"csgoflyctrl"，"csgomarktp"，"csgonotify"，"csgoinfo"，"csgo_menu"}
+局部函数是mygui(g)局部n=g.名称：lower()for_，kw in ipairs(KILL_KEYWORDS)do如果n:find(kw，1，true)则返回true结束返回假结束
+local_killed=0
+本地函数safeClean(容器)如果不是容器，则在ipairs中为_，G返回端(container:GetChildren())do pcall(函数()如果G:Isa("ScreenGui")，则本地准确的=_为false，名称在ipairs中(KILL_EXACT)执行如果g.Name==名称则exact=true中断结束如果exact或isMyGui(g)则g：销毁()_killed=_killed+1结束结束结束)
 safeClean(CG)safeClean(PG)
 task.wait(0.15)
 local SG=PG or CG
