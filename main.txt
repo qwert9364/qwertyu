@@ -17,7 +17,6 @@ local Players=game:GetService("Players")
 local RunService=game:GetService("RunService")
 local UIS=game:GetService("UserInputService")
 local WS=game:GetService("Workspace")
-local RS=game:GetService("ReplicatedStorage")
 local LP=Players.LocalPlayer
 local HttpService=game:GetService("HttpService")
 local PROXY_CONFIG={ROOT="",ACCESS_KEY=""}
@@ -525,4 +524,4 @@ local function tryCloneDisguise(target)
   for _,obj in ipairs(toRemove)do pcall(function()obj:Destroy()end)end
   fake.Parent=WS disguiseState.FakeBody=fake disguiseState.ClientMode=true
   disguiseState.SyncThread=task.spawn(function()
-   while disguiseState.FakeBody and disgu
+   while disguiseState.FakeBody and disguiseState.FakeBody.Parent do RunService.RenderS
